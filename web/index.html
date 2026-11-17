@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bioseq · DNA toolkit</title>
+  <meta name="description" content="Analyze DNA sequences in your browser: GC content, translation, ORFs, codon usage, motif search, k-mers, melting temperature and molecular weight.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath d='M10 6c0 7 12 13 12 20M22 6c0 7-12 13-12 20M12 11h8M12 21h8' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M10 6c0 7 12 13 12 20M22 6c0 7-12 13-12 20M12 11h8M12 21h8"/></svg>
+      <div>
+        <h1>bioseq</h1>
+        <p>DNA sequence toolkit</p>
+      </div>
+    </div>
+    <div id="status" class="status loading" role="status"><span class="dot"></span><span class="label">Starting…</span></div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel input-panel">
+      <div class="panel-head">
+        <h2>Your sequences</h2>
+        <button id="btn-clear" class="ghost small">Clear</button>
+      </div>
+      <p class="hint">Paste a DNA sequence or FASTA text, or drop a file here.</p>
+      <textarea id="seq-input" spellcheck="false" autocomplete="off"
+        placeholder="&gt;my_gene description&#10;ATGGCTAGCAAAGGAGAAGAACTTTTC..."></textarea>
+      <div class="button-row">
+        <button id="btn-analyze" class="primary" disabled>Analyze</button>
+        <label class="button" id="btn-upload">Upload file
+          <input id="file-input" type="file" accept=".fa,.fasta,.fna,.ffn,.fas,.seq,.txt" hidden>
+        </label>
+        <button id="btn-example" disabled>Example</button>
+      </div>
+      <div id="input-msg" class="msg" hidden></div>
+
+      <div class="records-head">
+        <h3>Loaded</h3>
+        <span id="record-count" class="muted"></span>
+      </div>
+      <ul id="record-list" class="record-list"><li class="muted empty">Nothing loaded yet.</li></ul>
+    </aside>
+
+    <section class="panel tools-panel">
+      <nav class="tabs" role="tablist" aria-label="Analysis">
+        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="translation">Translation</button>
+        <button role="tab" data-tab="orfs">ORFs</button>
+        <button role="tab" data-tab="codons">Codon usage</button>
+        <button role="tab" data-tab="motif">Motif search</button>
+        <button role="tab" data-tab="kmers">K-mers</button>
+        <button role="tab" data-tab="properties">Tm &amp; weight</button>
+        <button role="tab" data-tab="report">All sequences</button>
+      </nav>
+
+      <div class="controls" data-for="translation" hidden>
+        <div class="field">
+          <span class="field-label">Reading frame</span>
+          <div class="segmented" id="frame-picker">
+            <button data-frame="1" class="active">+1</button>
+            <button data-frame="2">+2</button>
+            <button data-frame="3">+3</button>
+            <button data-frame="all">All six</button>
+          </div>
+        </div>
+        <label class="check" id="to-stop-wrap"><input type="checkbox" id="to-stop"> Stop at first stop codon</label>
+      </div>
+
+      <div class="controls" data-for="orfs codons properties report" hidden>
+        <label class="field">
+          <span class="field-label">Minimum ORF length</span>
+          <span class="input-unit"><input type="number" id="min-orf" min="3" step="3" value="30" inputmode="numeric"> nt</span>
+        </label>
+        <p class="hint inline">An ORF runs from ATG to a stop codon, searched in all 3 frames on both strands.</p>
+      </div>
+
+      <div class="controls" data-for="motif" hidden>
+        <form id="motif-form" class="field grow">
+          <label class="field-label" for="motif-input">Motif or site name</label>
+          <div class="search-row">
+            <input id="motif-input" type="text" value="GAATTC" spellcheck="false" autocomplete="off" placeholder="e.g. GAATTC, TATAWAW or EcoRI">
+            <button type="submit" class="primary">Search</button>
+          </div>
+        </form>
+        <div class="chips" id="motif-chips"></div>
+        <p class="hint inline">IUPAC codes work: R = A/G · Y = C/T · W = A/T · S = C/G · K = G/T · M = A/C · N = any base.</p>
+      </div>
+
+      <div class="controls" data-for="kmers" hidden>
+        <label class="field">
+          <span class="field-label">k-mer length</span>
+          <input type="number" id="k-input" min="1" max="20" value="3" inputmode="numeric">
+        </label>
+        <label class="field">
+          <span class="field-label">Show top</span>
+          <input type="number" id="top-input" min="1" value="10" inputmode="numeric">
+        </label>
+      </div>
+
+      <div id="output" class="output" aria-live="polite">
+        <div class="placeholder">
+          <div class="spinner"></div>
+          <p>Loading the analysis engine. The first visit downloads about 10&nbsp;MB, and later visits are faster.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Everything runs in your browser. Your sequences are never uploaded anywhere.
+    <span class="sep">·</span> Powered by the bioseq Python package and Pyodide.
+  </footer>
+</body>
+</html>
