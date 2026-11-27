@@ -5,16 +5,18 @@ It reads DNA sequences from a FASTA file and reports basic statistics.
 
 ## Features
 
-- FASTA file parsing
+- FASTA file parsing (DNA or RNA: U is read as T)
 - Nucleotide counts and GC content
 - Reverse complement
 - Transcription (DNA → mRNA) and translation (DNA → protein, standard genetic code)
 - Six-frame translation
 - Open reading frame (ORF) detection on both strands
 - Codon usage table (from the ORFs found)
-- Motif search on both strands, with IUPAC codes (e.g. `TATAWAW`) and named sites (EcoRI, BamHI, HindIII, NotI)
+- Motif search on both strands, with IUPAC codes (e.g. `TATAWAW`) and named sites
+- 16 common restriction enzymes (EcoRI, BamHI, HindIII, NotI, EcoRV, XhoI, PstI, SmaI, …) with cut positions and the ends they leave
 - K-mer counting
-- Melting temperature estimate (Wallace rule / GC formula) for primers
+- Primer melting temperature by the nearest-neighbor method (SantaLucia 1998, with salt and primer concentration), plus the quick Wallace rule / GC formula
+- Composition along the sequence: GC content, GC/AT skew and complexity (Shannon entropy) in sliding windows, and CpG islands
 - Molecular weight of DNA (single or double strand) and of proteins
 - Interactive terminal menu to explore each feature
 - A website version for people who prefer not to use the terminal
@@ -72,8 +74,9 @@ python3 -m unittest discover tests
 bioseq/
   fasta.py       FASTA reader
   sequence.py    sequence operations (GC, reverse complement, translation, ORFs, codon usage)
-  motifs.py      motif search and k-mer counting
+  motifs.py      motif search, restriction enzymes and k-mer counting
   properties.py  melting temperature and molecular weight
+  composition.py skew, sliding windows, complexity and CpG islands
 data/
   example.fasta  sample sequences
 web/
@@ -89,8 +92,6 @@ main.py          command-line entry point (report, menu, --web)
 
 ## Ideas for next steps
 
-- Sliding-window GC content
-- Restriction digest (cut positions and fragment sizes)
+- Restriction digest (fragment sizes and a virtual gel)
 - Pairwise alignment (Needleman-Wunsch / Smith-Waterman)
-- Compare against [Biopython](https://biopython.org/) results
-- Plot GC content along a sequence with matplotlib
+- Compare more results against [Biopython](https://biopython.org/) (the nearest-neighbor Tm already matches it)

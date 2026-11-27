@@ -4,13 +4,14 @@
 // web/bridge.py turns each analysis into JSON; this file only draws it.
 
 const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
-const BIOSEQ_FILES = ["__init__.py", "fasta.py", "sequence.py", "motifs.py", "properties.py"];
+const BIOSEQ_FILES = ["__init__.py", "fasta.py", "sequence.py", "motifs.py", "properties.py", "composition.py"];
 const SEQ_DISPLAY_LIMIT = 12000;   // longer sequences are shown truncated (copy/download stay full)
 const TABLE_ROW_LIMIT = 500;       // same idea for long tables
 
 const TOOL_FOR_TAB = {
   overview: "basics", translation: "translation", orfs: "orfs", codons: "codons",
-  motif: "motif", kmers: "kmers", properties: "properties", report: "report",
+  motif: "motif", kmers: "kmers", composition: "composition", properties: "properties",
+  report: "report",
 };
 
 const state = {
@@ -23,6 +24,9 @@ const state = {
   motif: "GAATTC",
   k: "3",
   top: "10",
+  window: "100",
+  na: "50",
+  oligo: "250",
 };
 
 let bridge = null;
@@ -184,7 +188,9 @@ function analyzeInput() {
   }
   state.records = result.records;
   if (!state.records.some(r => r.id === state.selected)) state.selected = state.records[0].id;
-  showInputMsg("ok", `Loaded ${plural(state.records.length, "sequence")}.`);
+  const rna = state.records.filter(r => r.rna).length;
+  showInputMsg("ok", `Loaded ${plural(state.records.length, "sequence")}.` +
+    (rna ? ` ${rna === state.records.length ? "RNA was" : `${plural(rna, "RNA sequence")} were`} read as DNA (U → T).` : ""));
   renderRecords();
   renderTool();
 }
@@ -209,7 +215,7 @@ function renderRecords() {
   list.innerHTML = state.records.map(r => `
     <li><button data-id="${esc(r.id)}" class="${r.id === state.selected ? "active" : ""}">
       <span class="rec-id">${esc(r.id)}</span>
-      <span class="rec-meta">${fmt(r.length)} bp · ${fmt(r.gc, 1)}% GC</span>
+      <span class="rec-meta">${fmt(r.length)} ${r.rna ? "nt · RNA" : "bp"} · ${fmt(r.gc, 1)}% GC</span>
     </button></li>`).join("");
 }
 
@@ -225,6 +231,7 @@ function params() {
   return {
     min_orf: state.minOrf, frame: state.frame, to_stop: state.toStop,
     motif: state.motif, k: state.k, top: state.top,
+    window: state.window, na: state.na, oligo: state.oligo,
   };
 }
 
@@ -379,6 +386,29 @@ function featureMap(length, features, { ticks = false } = {}) {
     </svg></div>`;
 }
 
+// Line chart of one value along the sequence, with optional shaded regions.
+function lineChart(length, points, { label, min, max, digits = 0, unit = "", zero = false, bands = [] }) {
+  if (!points.length) return "";
+  const W = Math.max(300, Math.floor($("#output").clientWidth - 40));
+  const H = 120, left = 44, right = 10, top = 8, bottom = 22;
+  const x = pos => left + (pos / length) * (W - left - right);
+  const y = v => top + (1 - (v - min) / (max - min)) * (H - top - bottom);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.pos).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
+  const shaded = bands.map(b =>
+    `<rect class="band" x="${x(b.start - 1).toFixed(1)}" y="${top}" width="${Math.max(2, x(b.end) - x(b.start - 1)).toFixed(1)}" height="${H - top - bottom}"><title>${esc(b.label)}</title></rect>`).join("");
+  const gridValues = zero ? [min, 0, max] : [min, (min + max) / 2, max];
+  const grid = gridValues.map(v => `<line class="${zero && v === 0 ? "zero" : "grid"}" x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"/>
+    <text x="${left - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v, digits)}${unit}</text>`).join("");
+  const step = niceStep(length / Math.max(2, Math.floor(W / 110)));
+  const ticks = [];
+  for (let p = step; p < length; p += step) ticks.push(p);
+  const axis = ticks.map(p => `<text x="${x(p)}" y="${H - 6}" text-anchor="middle">${fmt(p)}</text>`).join("");
+  return `<div class="chart"><div class="chart-label">${label}</div>
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)} along the sequence">
+      ${shaded}${grid}${axis}<path class="line" d="${path}"/>
+    </svg></div>`;
+}
+
 const RENDER = {
   overview(r) {
     const bases = ["A", "C", "G", "T"];
@@ -487,16 +517,26 @@ const RENDER = {
     }
     const plusHits = r.hits.filter(h => h.strand === "+").length;
     const csv = downloadButton("CSV", () => [`${safeName(rec)}_${safeName(r.motif)}_hits.csv`, toCsv([
-      ["start", "end", "strand", "site"], ...r.hits.map(h => [h.start, h.end, h.strand, h.site]),
+      ["start", "end", "strand", "site", ...(r.enzyme ? ["cut_after"] : [])],
+      ...r.hits.map(h => [h.start, h.end, h.strand, h.site, ...(r.enzyme ? [h.cut] : [])]),
     ]), "text/csv"]);
-    const features = r.hits.map(h => ({ ...h, label: `${h.site} at ${h.start}–${h.end} (${h.strand})` }));
-    const rows = r.hits.map((h, i) => [i + 1, `${fmt(h.start)}–${fmt(h.end)}`, strandBadge(h.strand), esc(h.site)]);
+    const enz = r.enzyme;
+    const cutText = h => `${fmt(h.cut)}^${fmt(h.cut + 1)}`;
+    const features = r.hits.map(h => ({ ...h,
+      label: `${h.site} at ${h.start}–${h.end} (${h.strand})${enz ? ` · cuts between ${cutText(h)}` : ""}` }));
+    const rows = r.hits.map((h, i) => [i + 1, `${fmt(h.start)}–${fmt(h.end)}`, strandBadge(h.strand), esc(h.site),
+      ...(enz ? [cutText(h)] : [])]);
     const capped = r.total > r.hits.length
       ? ` Only the first ${fmt(r.hits.length)} are listed.` : "";
+    const enzNote = enz
+      ? `<p class="note"><strong>${esc(enz.name)}</strong> cuts <span class="mono">${esc(enz.site.replace("^", " ^ "))}</span> and leaves ${esc(enz.ends === "blunt" ? "blunt ends" : `a ${enz.ends}`)}. <strong>Cut</strong> gives the two forward-strand bases the cut falls between: + rows show the top-strand cut, − rows the bottom-strand cut.</p>`
+      : "";
     return head("Motif search", csv) +
       `<p class="summary"><strong>${plural(r.total, "match", "matches")}</strong> for <strong>${esc(label)}</strong>: ${fmt(plusHits)} on the + strand and ${fmt(r.hits.length - plusHits)} on the − strand.${capped} Sites that read the same on both strands, like GAATTC, appear once per strand.</p>` +
+      enzNote +
       featureMap(r.length, features, { ticks: true }) +
-      table([{ label: "#", num: true }, { label: "Position" }, { label: "Strand" }, { label: "Site (5′→3′)", cls: "mono" }], rows);
+      table([{ label: "#", num: true }, { label: "Position" }, { label: "Strand" }, { label: "Site (5′→3′)", cls: "mono" },
+        ...(enz ? [{ label: "Cut", cls: "mono" }] : [])], rows);
   },
 
   kmers(r) {
@@ -516,23 +556,63 @@ const RENDER = {
       table([{ label: "Rank", num: true }, { label: "K-mer", cls: "mono" }, { label: "Count", num: true }, { label: "Share" }], rows);
   },
 
+  composition(r) {
+    const rec = state.selected;
+    const csv = downloadButton("Windows (CSV)", () => [`${safeName(rec)}_composition.csv`, toCsv([
+      ["start", "end", "gc_percent", "gc_skew", "entropy_bits"],
+      ...r.windows.map(w => [w.start, w.end, w.gc, w.gc_skew, w.entropy]),
+    ]), "text/csv"]);
+    const center = w => (w.start - 1 + w.end) / 2;
+    const series = key => r.windows.map(w => ({ pos: center(w), value: w[key] }));
+    const bands = r.islands.map(i => ({ ...i, label: `CpG island ${fmt(i.start)}–${fmt(i.end)} · ${fmt(i.gc, 1)}% GC · obs/exp ${fmt(i.obs_exp, 2)}` }));
+    const skewMax = Math.max(0.1, ...r.windows.map(w => Math.abs(w.gc_skew)));
+    const skewLim = Math.ceil(skewMax * 10) / 10;
+    const islandRows = r.islands.map((i, n) => [n + 1, `${fmt(i.start)}–${fmt(i.end)}`, fmt(i.length), fmt(i.gc, 1), fmt(i.obs_exp, 2)]);
+    return head("Composition", csv) +
+      `<div class="tiles">
+        ${tile("GC skew", fmt(r.gc_skew, 3), "", "(G − C) / (G + C)")}
+        ${tile("AT skew", fmt(r.at_skew, 3), "", "(A − T) / (A + T)")}
+        ${tile("Complexity", fmt(r.entropy, 2), "bits", "Shannon entropy, max 2")}
+        ${tile("CpG obs/exp", fmt(r.cpg_obs_exp, 2), "", "about 0.2–0.3 in bulk human DNA")}
+        ${tile("CpG islands", fmt(r.islands.length), "", "≥ 200 bp, ≥ 50% GC, obs/exp ≥ 0.6")}
+      </div>
+      <p class="summary">Values in sliding windows of ${fmt(r.window)} bp, every ${plural(r.step, "base")}. ${r.islands.length ? "Shaded regions are CpG islands." : ""}</p>
+      ${lineChart(r.length, series("gc"), { label: "GC content (%)", min: 0, max: 100, unit: "%", bands })}
+      ${lineChart(r.length, series("gc_skew"), { label: "GC skew", min: -skewLim, max: skewLim, digits: 1, zero: true })}
+      ${lineChart(r.length, series("entropy"), { label: "Complexity (bits): dips mark repeats and low-complexity stretches", min: 0, max: 2, digits: 1 })}` +
+      (r.islands.length
+        ? `<h3 class="section-title">CpG islands</h3>` + table([{ label: "#", num: true }, { label: "Position" },
+            { label: "Length (bp)", num: true }, { label: "GC %", num: true }, { label: "Obs/exp CpG", num: true }], islandRows)
+        : "") +
+      `<p class="note"><strong>GC skew</strong> changes sign near the origin and terminus of replication in many bacteria and phages.
+        <strong>CpG islands</strong> use the Gardiner-Garden &amp; Frommer criteria: qualifying 200 bp windows are merged, then trimmed so each island meets the criteria as a whole.
+        They are meaningful in vertebrate DNA, where CpG is otherwise rare. Bacteria and phages don't deplete CpG, so long stretches of their genomes qualify.</p>`;
+  },
+
   properties(r) {
     const o = r.longest_orf;
     const orfTile = o
       ? tile("Longest ORF protein", o.mw == null ? "–" : fmt(o.mw / 1000, 2), o.mw == null ? "" : "kDa",
         `${fmt(o.aa)} aa · ORF ${fmt(o.start)}–${fmt(o.end)} (${o.strand})${o.mw == null ? " · contains unknown residues" : ""}`)
       : tile("Longest ORF protein", "–", "", `No ORFs of at least ${fmt(r.min_orf)} nt`);
+    const nnTile = r.tm_nn == null
+      ? tile("Tm, nearest-neighbor", "–", "", esc(r.tm_nn_error))
+      : tile("Tm, nearest-neighbor", fmt(r.tm_nn, 1), "°C", `SantaLucia 1998 · ${fmt(r.na)} mM Na⁺ · ${fmt(r.oligo)} nM primer`);
     return head("Melting temperature & molecular weight") +
       `<div class="tiles wide">
-        ${tile("Melting temperature", fmt(r.tm, 1), "°C", r.tm_method)}
+        ${nnTile}
+        ${tile("Tm, basic formula", fmt(r.tm, 1), "°C", r.tm_method)}
         ${tile("DNA weight, single strand", fmt(r.mw_single / 1000, 2), "kDa", `${fmt(r.mw_single, 2)} g/mol`)}
         ${tile("DNA weight, double strand", fmt(r.mw_double / 1000, 2), "kDa", `${fmt(r.mw_double, 2)} g/mol`)}
         ${orfTile}
       </div>
       <p class="note">
-        <strong>Melting temperature</strong> is a quick estimate meant for short oligos such as PCR primers.
-        Below 14 nt it uses the Wallace rule, 2·(A+T) + 4·(G+C). From 14 nt up it uses 64.9 + 41·(G+C − 16.4)/length.
-        Neither formula accounts for salt or primer concentration${r.length > 60 ? ", and the value isn't meaningful for a sequence this long" : ""}.<br>
+        <strong>Nearest-neighbor Tm</strong> is the method primer suppliers use. It sums the stacking energy of each
+        neighboring base pair (SantaLucia 1998 unified parameters) and corrects for the Na⁺ and primer concentrations set above,
+        assuming the primer is in excess over its target. Use it to design and match primers.<br>
+        <strong>Basic formula Tm</strong> is a quick estimate that ignores salt and concentration:
+        the Wallace rule 2·(A+T) + 4·(G+C) below 14 nt, and 64.9 + 41·(G+C − 16.4)/length from 14 nt up.
+        ${r.length > 60 ? "Neither value is meaningful for a sequence this long. Both are meant for oligos up to about 60 nt." : ""}<br>
         <strong>DNA weight</strong> uses anhydrous nucleotide weights (OligoCalc), without a 5′ phosphate.
         <strong>Protein weight</strong> uses average amino acid residue weights (ExPASy).
       </p>`;
@@ -620,6 +700,9 @@ function bindEvents() {
   bindNumber("#min-orf", "minOrf");
   bindNumber("#k-input", "k");
   bindNumber("#top-input", "top");
+  bindNumber("#window-input", "window");
+  bindNumber("#na-input", "na");
+  bindNumber("#oligo-input", "oligo");
 
   $("#motif-form").addEventListener("submit", e => {
     e.preventDefault();
@@ -652,7 +735,7 @@ function bindEvents() {
 
   let lastWidth = window.innerWidth;
   window.addEventListener("resize", debounce(() => {
-    if (window.innerWidth !== lastWidth && (state.tab === "orfs" || state.tab === "motif")) renderTool();
+    if (window.innerWidth !== lastWidth && ["orfs", "motif", "composition"].includes(state.tab)) renderTool();
     lastWidth = window.innerWidth;
   }, 200));
 }

@@ -26,14 +26,21 @@ class TestLoadText(unittest.TestCase):
     def test_bare_sequence_ignores_spaces_and_numbers(self):
         result = call("load_text", "  1 atgcatgcat gcatg\n 16 caTGC  ")
         self.assertTrue(result["ok"])
-        self.assertEqual(result["records"], [{"id": "sequence", "length": 20, "gc": 50.0}])
+        self.assertEqual(result["records"], [{"id": "sequence", "length": 20, "gc": 50.0, "rna": False}])
 
     def test_errors(self):
         self.assertFalse(call("load_text", "   ")["ok"])
         self.assertIn("before the first", call("load_text", "ACGT\n>a\nACGT")["error"])
-        rna = call("load_text", ">r\nAUGC")
-        self.assertFalse(rna["ok"])
-        self.assertIn("replace U with T", rna["error"])
+        bad = call("load_text", ">r\nAUGZ")
+        self.assertFalse(bad["ok"])
+        self.assertIn("(or U)", bad["error"])
+
+    def test_rna_is_read_as_dna(self):
+        result = call("load_text", ">r\nAUGGCUUAA\n>d\nATG")
+        self.assertTrue(result["ok"])
+        self.assertEqual([(r["id"], r["rna"]) for r in result["records"]], [("r", True), ("d", False)])
+        protein = call("run", "translation", "r", json.dumps({"frame": "1"}))["protein"]
+        self.assertEqual(protein, "MA*")
 
     def test_failed_load_keeps_previous_records(self):
         call("load_text", ">keep\nACGT")
@@ -79,6 +86,27 @@ class TestRun(unittest.TestCase):
         self.assertEqual((r["motif"], r["total"]), ("GCGGCCGC", 4))
         self.assertFalse(self.run_tool("motif", motif="GAZ")["ok"])
 
+    def test_enzyme_hits_have_cut_positions(self):
+        r = self.run_tool("motif", "seq3", motif="notI")
+        self.assertEqual(r["enzyme"], {"name": "NotI", "site": "GC^GGCCGC", "ends": "4-nt 5' overhang"})
+        for hit in r["hits"]:
+            expected = hit["start"] + 1 if hit["strand"] == "+" else hit["end"] - 2
+            self.assertEqual(hit["cut"], expected)
+        self.assertNotIn("enzyme", self.run_tool("motif", "seq3", motif="GCGGCCGC"))
+
+    def test_composition(self):
+        r = self.run_tool("composition", window="20")
+        self.assertEqual(r["window"], 20)
+        self.assertEqual(r["windows"][0]["start"], 1)
+        self.assertTrue(all(w["end"] - w["start"] + 1 == 20 for w in r["windows"]))
+        self.assertEqual(r["islands"], [])
+        self.assertFalse(self.run_tool("composition", window="0")["ok"])
+
+    def test_composition_window_capped_for_long_sequences(self):
+        call("load_text", ">long\n" + "ACGT" * 5000)
+        r = self.run_tool("composition", "long", window="10")
+        self.assertLessEqual(len(r["windows"]), bridge.MAX_WINDOWS)
+
     def test_kmers(self):
         r = self.run_tool("kmers", "seq2", k="2", top="2")
         self.assertEqual((r["total"], r["distinct"]), (43, 4))
@@ -87,6 +115,15 @@ class TestRun(unittest.TestCase):
     def test_properties(self):
         r = self.run_tool("properties")
         self.assertEqual(r["tm_method"], "GC formula")
+        call("load_text", ">n\nACGTNACGT")
+        n = self.run_tool("properties", "n")
+        self.assertIsNone(n["tm_nn"])
+        self.assertIn("N bases", n["tm_nn_error"])
+        call("load_text", ">p\nGTAAAACGACGGCCAGT")
+        p = self.run_tool("properties", "p", na="50", oligo="250")
+        self.assertEqual(p["tm_nn"], 53.9)
+        self.assertGreater(self.run_tool("properties", "p", na="200")["tm_nn"], p["tm_nn"])
+        self.assertFalse(self.run_tool("properties", "p", oligo="0")["ok"])
         self.assertEqual(r["longest_orf"]["aa"], 38)
 
     def test_protein_with_unknown_residue_has_no_weight(self):

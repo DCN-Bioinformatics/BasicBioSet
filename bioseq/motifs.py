@@ -14,12 +14,31 @@ IUPAC = {
     "N": "ACGTN",
 }
 
-# A few well-known sites, usable by name in the menu.
+# Common restriction enzymes: recognition site with ^ where the top strand is
+# cut. All of these sites are palindromic, so the bottom strand is cut at the
+# mirror position and every site is found once on each strand.
+RESTRICTION_ENZYMES = {
+    "EcoRI": "G^AATTC",
+    "BamHI": "G^GATCC",
+    "HindIII": "A^AGCTT",
+    "NotI": "GC^GGCCGC",
+    "EcoRV": "GAT^ATC",
+    "XhoI": "C^TCGAG",
+    "PstI": "CTGCA^G",
+    "SmaI": "CCC^GGG",
+    "KpnI": "GGTAC^C",
+    "SacI": "GAGCT^C",
+    "XbaI": "T^CTAGA",
+    "SalI": "G^TCGAC",
+    "NcoI": "C^CATGG",
+    "NdeI": "CA^TATG",
+    "SpeI": "A^CTAGT",
+    "BglII": "A^GATCT",
+}
+
+# Well-known sites, usable by name in the menu and on the website.
 COMMON_MOTIFS = {
-    "EcoRI": "GAATTC",
-    "BamHI": "GGATCC",
-    "HindIII": "AAGCTT",
-    "NotI": "GCGGCCGC",
+    **{name: site.replace("^", "") for name, site in RESTRICTION_ENZYMES.items()},
     "TATA-box": "TATAWAW",
 }
 
@@ -29,6 +48,36 @@ def resolve_motif(name_or_motif: str) -> str:
     by_name = {name.lower(): motif for name, motif in COMMON_MOTIFS.items()}
     text = name_or_motif.strip()
     return by_name.get(text.lower(), text.upper())
+
+
+def find_enzyme(name: str) -> tuple[str, str] | None:
+    """Return (canonical name, site with ^) for an enzyme name in any case, else None."""
+    for enzyme, site in RESTRICTION_ENZYMES.items():
+        if enzyme.lower() == name.strip().lower():
+            return enzyme, site
+    return None
+
+
+def cut_position(start: int, end: int, strand: str, site: str) -> int:
+    """Where an enzyme cuts one strand at a site found by find_motif.
+
+    site is the recognition site with ^ (e.g. "G^AATTC"). Returns the number
+    of forward-strand bases before the cut, so the cut falls between bases
+    cut and cut + 1 (1-based). "+" hits give the top-strand cut; "-" hits give
+    the bottom-strand cut in forward coordinates.
+    """
+    offset = site.index("^")
+    return start + offset if strand == "+" else end - offset
+
+
+def overhang(site: str) -> str:
+    """Describe the ends an enzyme leaves, e.g. "4-nt 5' overhang" or "blunt"."""
+    offset = site.index("^")
+    length = len(site) - 1
+    if 2 * offset == length:
+        return "blunt"
+    size = abs(length - 2 * offset)
+    return f"{size}-nt {5 if 2 * offset < length else 3}' overhang"
 
 
 def _motif_regex(motif: str) -> re.Pattern:

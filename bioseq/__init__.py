@@ -1,10 +1,28 @@
 """bioseq: a small toolkit for basic DNA sequence analysis."""
 
+from .composition import (
+    at_skew,
+    cpg_obs_exp,
+    find_cpg_islands,
+    gc_skew,
+    shannon_entropy,
+    sliding_window,
+)
 from .fasta import read_fasta
-from .motifs import COMMON_MOTIFS, find_motif, kmer_counts, resolve_motif
+from .motifs import (
+    COMMON_MOTIFS,
+    RESTRICTION_ENZYMES,
+    cut_position,
+    find_enzyme,
+    find_motif,
+    kmer_counts,
+    overhang,
+    resolve_motif,
+)
 from .properties import (
     dna_molecular_weight,
     melting_temperature,
+    melting_temperature_nn,
     protein_molecular_weight,
 )
 from .sequence import (
@@ -14,6 +32,7 @@ from .sequence import (
     codon_usage,
     find_orfs,
     gc_content,
+    is_rna,
     orf_codon_usage,
     reverse_complement,
     six_frame_translation,
@@ -23,13 +42,24 @@ from .sequence import (
 )
 
 __all__ = [
+    "at_skew",
+    "cpg_obs_exp",
+    "find_cpg_islands",
+    "gc_skew",
+    "shannon_entropy",
+    "sliding_window",
     "read_fasta",
     "COMMON_MOTIFS",
+    "RESTRICTION_ENZYMES",
+    "cut_position",
+    "find_enzyme",
     "find_motif",
     "kmer_counts",
+    "overhang",
     "resolve_motif",
     "dna_molecular_weight",
     "melting_temperature",
+    "melting_temperature_nn",
     "protein_molecular_weight",
     "AMINO_ACID_NAMES",
     "CODON_TABLE",
@@ -37,6 +67,7 @@ __all__ = [
     "codon_usage",
     "find_orfs",
     "gc_content",
+    "is_rna",
     "orf_codon_usage",
     "reverse_complement",
     "six_frame_translation",
