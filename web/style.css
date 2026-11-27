@@ -434,6 +434,18 @@ tr.clickable:hover { background: var(--surface-2); }
 .map .feat.plus { fill: var(--plus); }
 .map .feat.minus { fill: var(--minus); }
 .map .feat:hover { opacity: .75; }
+/* line charts (composition tab) */
+.chart { margin: 4px 0 14px; }
+.chart-label { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font: 11px var(--sans); }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; }
+.chart .band { fill: color-mix(in srgb, var(--base-g) 22%, transparent); }
+.section-title { font-size: 14px; margin: 18px 0 8px; }
+.mono { font-family: var(--mono); }
+
 .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
 .legend .swatch.plus { background: var(--plus); }
 .legend .swatch.minus { background: var(--minus); }

@@ -23,7 +23,7 @@ The website must be served over HTTP (via `--web` or GitHub Pages); opening `web
 
 One analysis library with two front ends that must give identical results:
 
-- **`bioseq/`** — the pure-Python core (FASTA parsing, sequence ops, motifs/k-mers, Tm and molecular weight). Everything public is re-exported from `bioseq/__init__.py`; both front ends import from the package root.
+- **`bioseq/`** — the pure-Python core (FASTA parsing, sequence ops, motifs/restriction enzymes/k-mers, Tm and molecular weight, sliding-window composition and CpG islands). `validate()` in `sequence.py` is the single entry point for input: every public function calls it, and it uppercases and reads RNA U as T. Everything public is re-exported from `bioseq/__init__.py`; both front ends import from the package root.
 - **`main.py`** — terminal UI. Report mode, an interactive menu (`mode_*` functions, one per menu entry), and `--web`, which starts a static `http.server` rooted at the repo so `web/` can reach `../bioseq/` and `../data/`.
 - **`web/`** — browser UI that runs the *real* `bioseq` package inside Pyodide (loaded from jsDelivr, pinned in `web/app.js`). No server-side analysis; sequences never leave the browser.
   - `web/app.js` fetches the files listed in `BIOSEQ_FILES` plus `bridge.py`, writes them into Pyodide's virtual FS under `/app`, and imports `bridge`. **Adding a new module to `bioseq/` requires adding it to `BIOSEQ_FILES`**, or the web app will fail to import it.

@@ -3,18 +3,30 @@ import unittest
 from pathlib import Path
 
 from bioseq import (
+    RESTRICTION_ENZYMES,
+    at_skew,
     base_counts,
     codon_usage,
+    cpg_obs_exp,
+    cut_position,
     dna_molecular_weight,
+    find_cpg_islands,
+    find_enzyme,
     find_motif,
     find_orfs,
     gc_content,
+    gc_skew,
+    is_rna,
     kmer_counts,
     melting_temperature,
+    melting_temperature_nn,
+    overhang,
     protein_molecular_weight,
     read_fasta,
     reverse_complement,
+    shannon_entropy,
     six_frame_translation,
+    sliding_window,
     transcribe,
     translate,
 )
@@ -40,6 +52,13 @@ class TestSequence(unittest.TestCase):
         self.assertEqual(translate("ATGGCTTAA"), "MA*")
         self.assertEqual(translate("ATGGCTTAAGGG", to_stop=True), "MA")
         self.assertEqual(translate("ATGNNN"), "MX")
+
+    def test_rna_is_read_as_dna(self):
+        self.assertTrue(is_rna("augc"))
+        self.assertFalse(is_rna("ATGC"))
+        self.assertEqual(translate("AUGGCUUAA"), "MA*")
+        self.assertEqual(reverse_complement("AUGC"), "GCAT")
+        self.assertEqual(gc_content("GCAU"), 50.0)
 
     def test_invalid_bases(self):
         with self.assertRaises(ValueError):
@@ -102,6 +121,26 @@ class TestMotifs(unittest.TestCase):
             with self.assertRaises(ValueError):
                 find_motif("ACGT", motif)
 
+    def test_enzymes_are_palindromes_with_a_cut(self):
+        for name, site in RESTRICTION_ENZYMES.items():
+            self.assertEqual(site.count("^"), 1, name)
+            plain = site.replace("^", "")
+            self.assertEqual(plain, reverse_complement(plain), name)
+
+    def test_find_enzyme(self):
+        self.assertEqual(find_enzyme(" ecori "), ("EcoRI", "G^AATTC"))
+        self.assertIsNone(find_enzyme("GAATTC"))
+
+    def test_cut_position_and_overhang(self):
+        seq = "AAGAATTCAA"
+        hits = find_motif(seq, "GAATTC")
+        self.assertEqual(hits, [(2, 8, "+"), (2, 8, "-")])
+        # Top strand G^AATTC cuts after base 3, bottom strand after base 7.
+        self.assertEqual([cut_position(*h, "G^AATTC") for h in hits], [3, 7])
+        self.assertEqual(overhang("G^AATTC"), "4-nt 5' overhang")
+        self.assertEqual(overhang("CTGCA^G"), "4-nt 3' overhang")
+        self.assertEqual(overhang("GAT^ATC"), "blunt")
+
     def test_kmer_counts(self):
         self.assertEqual(list(kmer_counts("ATATG", 2).items()), [("AT", 2), ("TA", 1), ("TG", 1)])
         self.assertEqual(kmer_counts("AC", 3), {})
@@ -116,6 +155,19 @@ class TestProperties(unittest.TestCase):
         with self.assertRaises(ValueError):
             melting_temperature("")
 
+    def test_melting_temperature_nn(self):
+        # Reference values from Biopython Tm_NN(DNA_NN3, Na=50, dnac1=250, dnac2=0, saltcorr=5).
+        self.assertAlmostEqual(melting_temperature_nn("GTAAAACGACGGCCAGT"), 53.86, places=2)
+        self.assertAlmostEqual(melting_temperature_nn("TAATACGACTCACTATAGGG"), 48.68, places=2)
+        self.assertAlmostEqual(melting_temperature_nn("GCGGCCGC"), 39.58, places=2)  # self-complementary
+        self.assertGreater(melting_temperature_nn("GTAAAACGACGGCCAGT", na_mm=200),
+                           melting_temperature_nn("GTAAAACGACGGCCAGT"))
+        for bad in ("A", "ACGTN"):
+            with self.assertRaises(ValueError):
+                melting_temperature_nn(bad)
+        with self.assertRaises(ValueError):
+            melting_temperature_nn("ACGT", oligo_nm=0)
+
     def test_dna_molecular_weight(self):
         self.assertAlmostEqual(dna_molecular_weight("A"), 251.25)
         self.assertAlmostEqual(dna_molecular_weight("A", double_stranded=True), 251.25 + 242.24)
@@ -126,6 +178,49 @@ class TestProperties(unittest.TestCase):
         self.assertEqual(protein_molecular_weight(""), 0.0)
         with self.assertRaises(ValueError):
             protein_molecular_weight("MXA")
+
+
+class TestComposition(unittest.TestCase):
+    def test_skews(self):
+        self.assertEqual(gc_skew("GGGC"), 0.5)
+        self.assertEqual(at_skew("ATTT"), -0.5)
+        self.assertEqual(gc_skew("ATAT"), 0.0)
+
+    def test_shannon_entropy(self):
+        self.assertEqual(shannon_entropy("ACGT"), 2.0)
+        self.assertEqual(shannon_entropy("CACACA"), 1.0)
+        self.assertEqual(shannon_entropy("AAAA"), 0.0)
+        self.assertEqual(shannon_entropy("NNN"), 0.0)
+
+    def test_cpg_obs_exp(self):
+        self.assertEqual(cpg_obs_exp("CGCG"), 2.0)  # 2 CpG * 4 / (2 C * 2 G)
+        self.assertEqual(cpg_obs_exp("CCGG"), 1.0)
+        self.assertEqual(cpg_obs_exp("AAAA"), 0.0)
+
+    def test_sliding_window(self):
+        rows = sliding_window("GGGGAAAA", window=4, step=4)
+        self.assertEqual([(r["start"], r["end"], r["gc"]) for r in rows], [(0, 4, 100.0), (4, 8, 0.0)])
+        self.assertEqual(len(sliding_window("ACGT", window=100)), 1)  # shrinks to the sequence
+        self.assertEqual(sliding_window("", window=10), [])
+        with self.assertRaises(ValueError):
+            sliding_window("ACGT", window=0)
+
+    def test_cpg_islands(self):
+        island = "CG" * 150  # 300 bp, 100% GC, plenty of CpG
+        seq = "AT" * 200 + island + "AT" * 200
+        # A 200 bp window half in the flank is still 50% GC, so the island
+        # reaches 100 bp into each AT flank: that is how the window rule works.
+        self.assertEqual(find_cpg_islands(seq), [(300, 800)])
+        self.assertEqual(find_cpg_islands("GGCCA" * 80), [])  # GC-rich but no CpG
+        self.assertEqual(find_cpg_islands("CG" * 50), [])     # shorter than 200 bp
+
+    def test_cpg_islands_meet_criteria_after_merging(self):
+        seq = ("CGAT" * 40 + "GGCCA" * 30) * 4  # alternating CpG-rich and CpG-poor
+        for start, end in find_cpg_islands(seq):
+            region = seq[start:end]
+            self.assertGreaterEqual(end - start, 200)
+            self.assertGreaterEqual(gc_content(region), 50)
+            self.assertGreaterEqual(cpg_obs_exp(region), 0.6)
 
 
 class TestFasta(unittest.TestCase):

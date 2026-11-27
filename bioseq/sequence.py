@@ -32,9 +32,17 @@ AMINO_ACID_NAMES = {
 
 VALID_BASES = set("ACGTN")
 
+def is_rna(seq: str) -> bool:
+    """True if the sequence contains U (so validate will read it as RNA)."""
+    return "U" in seq.upper()
+
+
 def validate(seq: str) -> str:
-    """Return the sequence in uppercase, or raise ValueError if it has invalid bases."""
-    seq = seq.upper()
+    """Return the sequence as uppercase DNA, or raise ValueError if it has invalid bases.
+
+    RNA is accepted: every U is read as T, so all functions work on RNA input.
+    """
+    seq = seq.upper().replace("U", "T")
     invalid = set(seq) - VALID_BASES
     if invalid:
         raise ValueError(f"Invalid DNA bases: {', '.join(sorted(invalid))}")

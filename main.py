@@ -18,19 +18,30 @@ from bioseq import (
     AMINO_ACID_NAMES,
     CODON_TABLE,
     COMMON_MOTIFS,
+    at_skew,
     base_counts,
+    cpg_obs_exp,
+    cut_position,
     dna_molecular_weight,
+    find_cpg_islands,
+    find_enzyme,
     find_motif,
     find_orfs,
     gc_content,
+    gc_skew,
+    is_rna,
     kmer_counts,
     melting_temperature,
+    melting_temperature_nn,
     orf_codon_usage,
+    overhang,
     protein_molecular_weight,
     read_fasta,
     resolve_motif,
     reverse_complement,
+    shannon_entropy,
     six_frame_translation,
+    sliding_window,
     transcribe,
     translate,
     validate,
@@ -40,6 +51,7 @@ DEFAULT_FASTA = "data/example.fasta"
 DEFAULT_MIN_ORF = 30
 MAX_LISTED = 50  # cap on how many motif hits get printed
 DEFAULT_PORT = 8000
+SPARK = "▁▂▃▄▅▆▇█"
 
 
 def preview(seq: str, width: int = 50) -> str:
@@ -101,6 +113,9 @@ def load(path: str) -> dict[str, str] | None:
         print(f"Could not read {path}: {e}")
         return None
     print(f"Loaded {len(records)} sequence(s) from {path}")
+    rna = [seq_id for seq_id, seq in records.items() if is_rna(seq)]
+    if rna:
+        print(f"RNA read as DNA (U -> T): {', '.join(rna)}")
     return records
 
 
@@ -194,18 +209,29 @@ def mode_codon_usage(seq_id, seq, settings):
 
 def mode_motif(seq_id, seq, settings):
     print("Motif to search (IUPAC codes allowed, e.g. GAATTC or TATAWAW),")
-    print("or one of: " + ", ".join(f"{name} ({m})" for name, m in COMMON_MOTIFS.items()))
+    print("or a name. Restriction enzymes also show where they cut:")
+    names = [f"{name} ({m})" for name, m in COMMON_MOTIFS.items()]
+    for i in range(0, len(names), 4):
+        print("  " + "  ".join(f"{n:<20}" for n in names[i:i + 4]).rstrip())
     raw = ask("> ")
     if not raw:
         return
     motif = resolve_motif(raw)
     label = motif if motif == raw.upper() else f"{raw} ({motif})"
+    enzyme = find_enzyme(raw)
 
     hits = find_motif(seq, motif)
     print(f"{label} in {seq_id}: {len(hits)} hit(s)")
+    if enzyme and hits:
+        print(f"  {enzyme[0]} cuts {enzyme[1]} ({overhang(enzyme[1])}); "
+              "'cut a^b' = between bases a and b (+ top strand, - bottom strand)")
     for start, end, strand in hits[:MAX_LISTED]:
         site = seq[start:end] if strand == "+" else reverse_complement(seq[start:end])
-        print(f"  {start + 1}-{end} ({strand})  {site}")
+        cut = ""
+        if enzyme:
+            pos = cut_position(start, end, strand, enzyme[1])
+            cut = f"  cut {pos}^{pos + 1}"
+        print(f"  {start + 1}-{end} ({strand})  {site}{cut}")
     if len(hits) > MAX_LISTED:
         print(f"  ... and {len(hits) - MAX_LISTED} more")
 
@@ -223,13 +249,47 @@ def mode_kmers(seq_id, seq, settings):
         print(f"  {kmer}  {n:>5}  ({100 * n / total:.1f}%)")
 
 
+def mode_composition(seq_id, seq, settings):
+    window = ask_int("Window size in bp", min(100, max(1, len(seq))))
+    print(f"== {seq_id} ==")
+    print(f"  GC content:   {gc_content(seq):.1f}%")
+    print(f"  GC skew:      {gc_skew(seq):+.3f}   (G-C)/(G+C)")
+    print(f"  AT skew:      {at_skew(seq):+.3f}   (A-T)/(A+T)")
+    print(f"  Complexity:   {shannon_entropy(seq):.2f} bits (Shannon entropy, max 2)")
+    print(f"  CpG obs/exp:  {cpg_obs_exp(seq):.2f}")
+    rows = sliding_window(seq, window)
+    if len(rows) > 1:
+        # Average neighboring windows so each line fits in about 60 characters.
+        group = -(-len(rows) // 60)
+        for key, label, lo, hi in (("gc", "GC %", 0, 100), ("gc_skew", "GC skew", -1, 1),
+                                   ("entropy", "Complexity", 0, 2)):
+            values = [sum(r[key] for r in rows[i:i + group]) / len(rows[i:i + group])
+                      for i in range(0, len(rows), group)]
+            line = "".join(SPARK[min(7, int((v - lo) / (hi - lo) * 8))] for v in values)
+            print(f"  {label:<11} {line}  ({lo} to {hi})")
+        print(f"  ({len(rows)} windows of {rows[0]['end']} bp, 1 to {len(seq):,})")
+    islands = find_cpg_islands(seq)
+    print(f"  CpG islands (>= 200 bp, >= 50% GC, obs/exp >= 0.6): {len(islands) or 'none'}")
+    for start, end in islands[:MAX_LISTED]:
+        region = seq[start:end]
+        print(f"    {start + 1}-{end}  ({end - start} bp, {gc_content(region):.1f}% GC, "
+              f"obs/exp {cpg_obs_exp(region):.2f})")
+
+
 def mode_properties(seq_id, seq, settings):
     method = "Wallace rule" if len(seq) < 14 else "GC formula"
     print(f"== {seq_id} ==")
-    print(f"  Melting temperature: {melting_temperature(seq):.1f} °C  "
-          f"({method}; a rough estimate meant for short primers)")
-    print(f"  Molecular weight:    {dna_molecular_weight(seq):,.2f} g/mol (single strand)")
-    print(f"                       {dna_molecular_weight(seq, double_stranded=True):,.2f} g/mol (double strand)")
+    try:
+        print(f"  Tm, nearest-neighbor: {melting_temperature_nn(seq):.1f} °C  "
+              "(SantaLucia 1998; 50 mM Na+, 250 nM primer)")
+    except ValueError as e:
+        print(f"  Tm, nearest-neighbor: n/a ({e})")
+    print(f"  Tm, basic formula:    {melting_temperature(seq):.1f} °C  "
+          f"({method}; a rough estimate)")
+    if len(seq) > 60:
+        print("  (Both Tm values are meant for primers up to about 60 nt.)")
+    print(f"  Molecular weight:     {dna_molecular_weight(seq):,.2f} g/mol (single strand)")
+    print(f"                        {dna_molecular_weight(seq, double_stranded=True):,.2f} g/mol (double strand)")
     orfs = find_orfs(seq, min_length=settings["min_orf"])
     if orfs:
         start, end, strand, protein = max(orfs, key=lambda o: o[1] - o[0])
@@ -237,9 +297,9 @@ def mode_properties(seq_id, seq, settings):
             weight = f"{protein_molecular_weight(protein):,.2f} g/mol"
         except ValueError:  # protein contains X (codon with an N)
             weight = "n/a (unknown residues)"
-        print(f"  Longest ORF protein: {weight} ({len(protein)} aa, ORF {start + 1}-{end} {strand})")
+        print(f"  Longest ORF protein:  {weight} ({len(protein)} aa, ORF {start + 1}-{end} {strand})")
     else:
-        print(f"  Longest ORF protein: no ORFs >= {settings['min_orf']} nt")
+        print(f"  Longest ORF protein:  no ORFs >= {settings['min_orf']} nt")
 
 
 SECTIONS = [
@@ -258,6 +318,7 @@ SECTIONS = [
         ("9", "Motif search", mode_motif),
         ("10", "K-mer counting", mode_kmers),
         ("11", "Melting temperature & molecular weight", mode_properties),
+        ("12", "Composition: GC skew, complexity, CpG islands", mode_composition),
     ]),
 ]
 MODES = {key: func for _, items in SECTIONS for key, _, func in items}
