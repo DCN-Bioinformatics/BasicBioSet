@@ -20,19 +20,24 @@ from bioseq import (
     cpg_obs_exp,
     cut_position,
     dna_molecular_weight,
+    fastq_summary,
     find_cpg_islands,
     find_enzyme,
     find_motif,
     find_orfs,
+    format_fastq,
     gc_content,
     gc_skew,
+    is_fastq,
     is_rna,
     kmer_counts,
     melting_temperature,
     melting_temperature_nn,
     orf_codon_usage,
     overhang,
+    parse_fastq,
     protein_molecular_weight,
+    quality_by_position,
     read_fasta,
     resolve_motif,
     reverse_complement,
@@ -41,13 +46,17 @@ from bioseq import (
     sliding_window,
     transcribe,
     translate,
+    trim_read,
     validate,
 )
 
 MAX_HITS = 2000  # cap on motif hits sent to the page
 MAX_WINDOWS = 800  # cap on sliding-window points sent to the page
+MAX_READS = 20_000  # FASTQ reads loaded (keeps the browser responsive)
+MAX_QUALITY_BINS = 150  # cap on per-position quality points
 
 _records: dict[str, str] = {}
+_qualities: dict[str, list[int]] = {}  # Phred scores per read, for FASTQ input
 
 
 def _ok(**data) -> str:
@@ -107,13 +116,17 @@ def load_text(text: str) -> str:
     Text containing '>' is read as FASTA (with bioseq's own reader). Anything
     else is treated as one bare sequence; spaces, line breaks and position
     numbers (as in GenBank listings) are ignored. RNA is accepted and read as
-    DNA (U -> T); such records are flagged with "rna": true.
+    DNA (U -> T); such records are flagged with "rna": true. Text whose first
+    line starts with '@' is read as FASTQ (at most MAX_READS reads); every read
+    becomes a record and its quality scores are kept for the 'quality' tool.
     """
-    global _records
+    global _records, _qualities
     text = text.strip()
     if not text:
         return _error("Paste a DNA sequence or a FASTA file first.")
 
+    if is_fastq(text):
+        return _load_fastq(text)
     if ">" in text:
         with tempfile.NamedTemporaryFile("w", suffix=".fasta", delete=False) as handle:
             handle.write(text)
@@ -139,11 +152,40 @@ def load_text(text: str) -> str:
             return _error(f"{seq_id}: {e}. Only A, C, G, T (or U) and N are allowed.")
         if is_rna(seq):
             rna.add(seq_id)
-    _records = checked
-    return _ok(records=[
-        {"id": seq_id, "length": len(seq), "gc": round(gc_content(seq), 1), "rna": seq_id in rna}
-        for seq_id, seq in _records.items()
-    ])
+    _records, _qualities = checked, {}
+    return _ok(format="fasta", records=_record_list(rna))
+
+
+def _record_list(rna: set) -> list[dict]:
+    return [{"id": seq_id, "length": len(seq), "gc": round(gc_content(seq), 1), "rna": seq_id in rna}
+            for seq_id, seq in _records.items()]
+
+
+def _load_fastq(text: str) -> str:
+    global _records, _qualities
+    try:
+        reads = parse_fastq(text.splitlines(), max_reads=MAX_READS + 1)
+    except ValueError as e:
+        return _error(f"This looks like FASTQ, but it could not be read. {e}.")
+    truncated = len(reads) > MAX_READS
+    reads = reads[:MAX_READS]
+    if not reads:
+        return _error("No reads found.")
+    records, qualities, rna = {}, {}, set()
+    for read_id, seq, scores in reads:
+        unique, n = read_id, 1
+        while unique in records:  # keep reads that share an id
+            n += 1
+            unique = f"{read_id}_{n}"
+        try:
+            records[unique] = validate(seq)
+        except ValueError as e:
+            return _error(f"{read_id}: {e}. Only A, C, G, T (or U) and N are allowed.")
+        if is_rna(seq):
+            rna.add(unique)
+        qualities[unique] = scores
+    _records, _qualities = records, qualities
+    return _ok(format="fastq", truncated=truncated, max_reads=MAX_READS, records=_record_list(rna))
 
 
 # --------------------------------------------------------------------- tools
@@ -272,6 +314,67 @@ def _composition(seq: str, params: dict) -> dict:
     }
 
 
+def _trim_params(params: dict) -> tuple[int, int, int]:
+    return (_positive_int(params, "trim_q", 20, "Quality threshold"),
+            _positive_int(params, "trim_window", 4, "Trimming window"),
+            _positive_int(params, "min_length", 36, "Minimum read length"))
+
+
+def _trimmed_reads(params: dict) -> list[tuple[str, str, list[int]]]:
+    threshold, window, min_length = _trim_params(params)
+    kept = []
+    for read_id, seq in _records.items():
+        trimmed, scores = trim_read(seq, _qualities[read_id], threshold, window)
+        if len(trimmed) >= min_length:
+            kept.append((read_id, trimmed, scores))
+    return kept
+
+
+def _reads() -> list[tuple[str, str, list[int]]]:
+    return [(read_id, seq, _qualities[read_id]) for read_id, seq in _records.items()]
+
+
+def _rounded(summary: dict) -> dict:
+    return {k: round(v, 2) if isinstance(v, float) else v for k, v in summary.items()}
+
+
+def _quality(params: dict) -> dict:
+    if not _qualities:
+        return {"fastq": False}
+    threshold, window, min_length = _trim_params(params)
+    reads = _reads()
+    before = fastq_summary(reads)
+    bin_size = -(-before["max_length"] // MAX_QUALITY_BINS)  # ceiling division
+    positions = [{**row, "mean": round(row["mean"], 2)}
+                 for row in quality_by_position([q for _, _, q in reads], bin_size)]
+    read_means = [round(sum(q) / len(q)) for _, _, q in reads if q]
+    histogram = [{"q": q, "reads": read_means.count(q)}
+                 for q in range(min(read_means, default=0), max(read_means, default=0) + 1)]
+    lengths = sorted({len(seq) for _, seq, _ in reads})
+    after = fastq_summary(_trimmed_reads(params))
+    return {
+        "fastq": True,
+        "summary": _rounded(before),
+        "bin_size": bin_size,
+        "positions": positions,
+        "read_quality": histogram,
+        "variable_length": len(lengths) > 1,
+        "trim": {"threshold": threshold, "window": window, "min_length": min_length,
+                 "after": _rounded(after)},
+    }
+
+
+def trimmed_fastq(params_json: str = "{}") -> str:
+    """The loaded FASTQ reads after quality trimming, as FASTQ text."""
+    try:
+        if not _qualities:
+            return _error("Load a FASTQ file first.")
+        kept = _trimmed_reads(json.loads(params_json or "{}"))
+        return _ok(text=format_fastq(kept), reads=len(kept))
+    except ValueError as e:
+        return _error(str(e))
+
+
 def _report(params: dict) -> dict:
     min_orf = _positive_int(params, "min_orf", 30, "Minimum ORF length")
     rows = []
@@ -301,6 +404,8 @@ def run(tool: str, seq_id: str, params_json: str = "{}") -> str:
         params = json.loads(params_json or "{}")
         if tool == "report":
             return _ok(**_report(params))
+        if tool == "quality":
+            return _ok(**_quality(params))
         if tool not in TOOLS:
             return _error(f"Unknown tool: {tool}")
         if seq_id not in _records:

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>bioseq · DNA toolkit</title>
-  <meta name="description" content="Analyze DNA and RNA sequences in your browser: GC content and skew, translation, ORFs, codon usage, restriction sites, motif search, k-mers, CpG islands, melting temperature and molecular weight.">
+  <meta name="description" content="Analyze DNA and RNA sequences in your browser: FASTQ read quality and trimming, GC content and skew, translation, ORFs, codon usage, restriction sites, motif search, k-mers, CpG islands, melting temperature and molecular weight.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath d='M10 6c0 7 12 13 12 20M22 6c0 7-12 13-12 20M12 11h8M12 21h8' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js" defer></script>
@@ -28,13 +28,13 @@
         <h2>Your sequences</h2>
         <button id="btn-clear" class="ghost small">Clear</button>
       </div>
-      <p class="hint">Paste a DNA or RNA sequence or FASTA text, or drop a file here.</p>
+      <p class="hint">Paste a DNA or RNA sequence, FASTA or FASTQ text, or drop a file here.</p>
       <textarea id="seq-input" spellcheck="false" autocomplete="off"
         placeholder="&gt;my_gene description&#10;ATGGCTAGCAAAGGAGAAGAACTTTTC..."></textarea>
       <div class="button-row">
         <button id="btn-analyze" class="primary" disabled>Analyze</button>
         <label class="button" id="btn-upload">Upload file
-          <input id="file-input" type="file" accept=".fa,.fasta,.fna,.ffn,.fas,.seq,.txt" hidden>
+          <input id="file-input" type="file" accept=".fa,.fasta,.fna,.ffn,.fas,.seq,.fastq,.fq,.txt" hidden>
         </label>
         <button id="btn-example" disabled>Example</button>
       </div>
@@ -57,6 +57,7 @@
         <button role="tab" data-tab="kmers">K-mers</button>
         <button role="tab" data-tab="composition">Composition</button>
         <button role="tab" data-tab="properties">Tm &amp; weight</button>
+        <button role="tab" data-tab="quality">Read quality</button>
         <button role="tab" data-tab="report">All sequences</button>
       </nav>
 
@@ -122,6 +123,21 @@
           <span class="input-unit"><input type="number" id="oligo-input" min="1" step="any" value="250" inputmode="decimal"> nM</span>
         </label>
         <p class="hint inline">Used by the nearest-neighbor Tm. Typical PCR: 50 mM Na⁺, 250 nM primer.</p>
+      </div>
+
+      <div class="controls" data-for="quality" hidden>
+        <label class="field">
+          <span class="field-label">Trim below</span>
+          <span class="input-unit">Q <input type="number" id="trim-q-input" min="1" max="41" value="20" inputmode="numeric"></span>
+        </label>
+        <label class="field">
+          <span class="field-label">Window</span>
+          <span class="input-unit"><input type="number" id="trim-window-input" min="1" value="4" inputmode="numeric"> bases</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Keep reads of at least</span>
+          <span class="input-unit"><input type="number" id="min-length-input" min="1" value="36" inputmode="numeric"> bp</span>
+        </label>
       </div>
 
       <div id="output" class="output" aria-live="polite">

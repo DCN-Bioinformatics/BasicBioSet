@@ -11,8 +11,10 @@ const TABLE_ROW_LIMIT = 500;       // same idea for long tables
 const TOOL_FOR_TAB = {
   overview: "basics", translation: "translation", orfs: "orfs", codons: "codons",
   motif: "motif", kmers: "kmers", composition: "composition", properties: "properties",
-  report: "report",
+  quality: "quality", report: "report",
 };
+const DATASET_TABS = ["quality", "report"];  // tabs about all records, not the selected one
+const RECORD_LIST_LIMIT = 200;
 
 const state = {
   records: [],
@@ -27,6 +29,10 @@ const state = {
   window: "100",
   na: "50",
   oligo: "250",
+  trimQ: "20",
+  trimWindow: "4",
+  minLength: "36",
+  format: "fasta",
 };
 
 let bridge = null;
@@ -186,11 +192,18 @@ function analyzeInput() {
     showInputMsg("error", result.error);
     return;
   }
+  const wasFastq = state.format === "fastq";
   state.records = result.records;
+  state.format = result.format;
   if (!state.records.some(r => r.id === state.selected)) state.selected = state.records[0].id;
   const rna = state.records.filter(r => r.rna).length;
-  showInputMsg("ok", `Loaded ${plural(state.records.length, "sequence")}.` +
+  const loaded = result.format === "fastq"
+    ? `Loaded ${plural(state.records.length, "read")} from FASTQ.` +
+      (result.truncated ? ` Only the first ${fmt(result.max_reads)} reads were loaded.` : "")
+    : `Loaded ${plural(state.records.length, "sequence")}.`;
+  showInputMsg(result.truncated ? "warn" : "ok", loaded +
     (rna ? ` ${rna === state.records.length ? "RNA was" : `${plural(rna, "RNA sequence")} were`} read as DNA (U → T).` : ""));
+  if (result.format === "fastq" && !wasFastq) state.tab = "quality";
   renderRecords();
   renderTool();
 }
@@ -212,11 +225,19 @@ function renderRecords() {
     list.innerHTML = `<li class="muted empty">Nothing loaded yet.</li>`;
     return;
   }
-  list.innerHTML = state.records.map(r => `
+  const shown = state.records.slice(0, RECORD_LIST_LIMIT);
+  if (!shown.some(r => r.id === state.selected)) {
+    const sel = state.records.find(r => r.id === state.selected);
+    if (sel) shown.push(sel);
+  }
+  list.innerHTML = shown.map(r => `
     <li><button data-id="${esc(r.id)}" class="${r.id === state.selected ? "active" : ""}">
       <span class="rec-id">${esc(r.id)}</span>
       <span class="rec-meta">${fmt(r.length)} ${r.rna ? "nt · RNA" : "bp"} · ${fmt(r.gc, 1)}% GC</span>
-    </button></li>`).join("");
+    </button></li>`).join("") +
+    (state.records.length > shown.length
+      ? `<li class="muted empty">…and ${fmt(state.records.length - shown.length)} more. All of them are included in Read quality and All sequences.</li>`
+      : "");
 }
 
 function renderMotifChips(motifs) {
@@ -232,12 +253,17 @@ function params() {
     min_orf: state.minOrf, frame: state.frame, to_stop: state.toStop,
     motif: state.motif, k: state.k, top: state.top,
     window: state.window, na: state.na, oligo: state.oligo,
+    trim_q: state.trimQ, trim_window: state.trimWindow, min_length: state.minLength,
   };
 }
 
 function updateTabs() {
   if (location.hash.slice(1) !== state.tab) history.replaceState(null, "", `#${state.tab}`);
-  $$(".tabs [data-tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === state.tab)));
+  $$(".tabs [data-tab]").forEach(t => {
+    const active = t.dataset.tab === state.tab;
+    t.setAttribute("aria-selected", String(active));
+    if (active && t.scrollIntoView) t.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
   $$(".controls").forEach(c => { c.hidden = !c.dataset.for.split(" ").includes(state.tab); });
 }
 
@@ -262,7 +288,7 @@ function renderTool() {
 
 function head(title, actions = "") {
   const rec = state.records.find(r => r.id === state.selected);
-  const sub = state.tab === "report" ? "" :
+  const sub = DATASET_TABS.includes(state.tab) ? "" :
     `<span class="sub">${esc(rec.id)} · ${fmt(rec.length)} bp</span>`;
   return `<div class="out-head"><h2>${esc(title)}${sub}</h2><div class="actions">${actions}</div></div>`;
 }
@@ -407,6 +433,61 @@ function lineChart(length, points, { label, min, max, digits = 0, unit = "", zer
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)} along the sequence">
       ${shaded}${grid}${axis}<path class="line" d="${path}"/>
     </svg></div>`;
+}
+
+// Per-position quality box plot in the style of FastQC: whiskers 10th-90th
+// percentile, box 25th-75th, median tick, and a line through the means.
+function qualityPlot(positions, maxLength) {
+  const W = Math.max(300, Math.floor($("#output").clientWidth - 40));
+  const H = 230, left = 40, right = 10, top = 8, bottom = 26;
+  const qMax = Math.max(41, ...positions.map(p => p.p90));
+  const plotW = W - left - right;
+  const x = pos => left + (pos / maxLength) * plotW;
+  const y = q => top + (1 - q / qMax) * (H - top - bottom);
+  const zones = [["bad", 0, 20], ["ok", 20, 28], ["good", 28, qMax]].map(([cls, lo, hi]) =>
+    `<rect class="zone ${cls}" x="${left}" y="${y(hi)}" width="${plotW}" height="${y(lo) - y(hi)}"/>`).join("");
+  const grid = [0, 10, 20, 30, 40].filter(q => q <= qMax).map(q =>
+    `<line class="grid" x1="${left}" x2="${W - right}" y1="${y(q)}" y2="${y(q)}"/>
+     <text x="${left - 6}" y="${y(q) + 4}" text-anchor="end">${q}</text>`).join("");
+  const boxes = positions.map(p => {
+    const x0 = x(p.start - 1), x1 = x(p.end), w = x1 - x0;
+    const bx = x0 + w * 0.15, bw = Math.max(1, w * 0.7), cx = x0 + w / 2;
+    const tip = `<title>${p.start === p.end ? `Base ${fmt(p.start)}` : `Bases ${fmt(p.start)}–${fmt(p.end)}`}: mean Q${fmt(p.mean, 1)}, median Q${p.median}, middle half Q${p.q1}–Q${p.q3} · ${plural(p.reads, "read")}</title>`;
+    return `<g>${tip}
+      <line class="whisker" x1="${cx}" x2="${cx}" y1="${y(p.p90)}" y2="${y(p.p10)}"/>
+      <rect class="box" x="${bx}" y="${y(p.q3)}" width="${bw}" height="${Math.max(1, y(p.q1) - y(p.q3))}"/>
+      <line class="median" x1="${bx}" x2="${bx + bw}" y1="${y(p.median)}" y2="${y(p.median)}"/></g>`;
+  }).join("");
+  const mean = positions.map((p, i) => `${i ? "L" : "M"}${(x(p.start - 1) + x(p.end)) / 2},${y(p.mean)}`).join("");
+  const step = niceStep(maxLength / Math.max(2, Math.floor(W / 90)));
+  const ticks = [1];
+  for (let p = step; p <= maxLength; p += step) ticks.push(p);
+  const axis = ticks.map(p => `<text x="${x(p === 1 ? 0.5 : p - 0.5)}" y="${H - 8}" text-anchor="middle">${fmt(p)}</text>`).join("");
+  return `<div class="chart quality-plot"><div class="chart-label">Quality along the reads (Phred score by base position)</div>
+    <div class="legend"><span><span class="swatch box"></span>Middle 50% of reads</span><span><span class="swatch whisker"></span>10th–90th percentile</span><span><span class="swatch mean"></span>Mean</span><span>Hover for details</span></div>
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Quality by position in the read">
+      ${zones}${grid}${boxes}<path class="mean" d="${mean}"/>${axis}
+    </svg></div>`;
+}
+
+function histogram(bars, { label, xLabel }) {
+  const W = Math.max(300, Math.floor($("#output").clientWidth - 40));
+  const H = 140, left = 40, right = 10, top = 8, bottom = 26;
+  const max = Math.max(1, ...bars.map(b => b.value));
+  const bw = (W - left - right) / bars.length;
+  const y = v => top + (1 - v / max) * (H - top - bottom);
+  const rects = bars.map((b, i) => `<g><title>${esc(b.title)}</title>
+    <rect class="hbar ${b.cls || ""}" x="${left + i * bw + 1}" y="${y(b.value)}" width="${Math.max(1, bw - 2)}" height="${H - bottom - y(b.value)}"/></g>`).join("");
+  const every = Math.max(1, Math.ceil(bars.length / Math.floor((W - left) / 32)));
+  const labels = bars.map((b, i) => i % every ? "" :
+    `<text x="${left + (i + 0.5) * bw}" y="${H - 8}" text-anchor="middle">${esc(b.label)}</text>`).join("");
+  return `<div class="chart"><div class="chart-label">${label}</div>
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)}">
+      <line class="grid" x1="${left}" x2="${W - right}" y1="${y(max)}" y2="${y(max)}"/>
+      <text x="${left - 6}" y="${y(max) + 4}" text-anchor="end">${fmt(max)}</text>
+      <text x="${left - 6}" y="${H - bottom + 4}" text-anchor="end">0</text>
+      ${rects}${labels}
+    </svg><div class="axis-label">${xLabel}</div></div>`;
 }
 
 const RENDER = {
@@ -618,6 +699,53 @@ const RENDER = {
       </p>`;
   },
 
+  quality(r) {
+    if (!r.fastq) {
+      return head("Read quality") +
+        `<div class="empty-state"><strong>Load a FASTQ file to see read quality</strong>
+          FASTQ files from sequencing machines hold a quality score for every base. Try <code>data/samples/lambda_reads.fastq</code>.</div>`;
+    }
+    const s = r.summary, t = r.trim, a = t.after;
+    const lengthText = s.min_length === s.max_length ? `${fmt(s.max_length)}` : `${fmt(s.min_length)}–${fmt(s.max_length)}`;
+    const trimmed = downloadButton("Trimmed reads (FASTQ)", () => {
+      const res = call("trimmed_fastq", JSON.stringify(params()));
+      return ["trimmed_reads.fastq", res.ok ? res.text : "", "text/plain"];
+    });
+    const csv = downloadButton("Per-position CSV", () => ["quality_by_position.csv", toCsv([
+      ["start", "end", "reads", "mean", "p10", "q1", "median", "q3", "p90"],
+      ...r.positions.map(p => [p.start, p.end, p.reads, p.mean, p.p10, p.q1, p.median, p.q3, p.p90]),
+    ]), "text/csv"]);
+    const bars = r.read_quality.map(b => ({
+      value: b.reads, label: `${b.q}`, cls: b.q < 20 ? "bad" : b.q < 28 ? "ok" : "good",
+      title: `${plural(b.reads, "read")} with mean quality Q${b.q}`,
+    }));
+    const pctKept = s.bases ? 100 * a.bases / s.bases : 0;
+    return head("Read quality", csv) +
+      `<div class="tiles">
+        ${tile("Reads", fmt(s.reads))}
+        ${tile("Read length", lengthText, "bp", s.min_length === s.max_length ? "all reads" : `mean ${fmt(s.mean_length, 1)} bp`)}
+        ${tile("Mean quality", `Q${fmt(s.mean_quality, 1)}`, "", "over all bases")}
+        ${tile("≥ Q30", fmt(s.q30, 1), "%", "of bases (1 error in 1,000)")}
+        ${tile("≥ Q20", fmt(s.q20, 1), "%", "of bases (1 error in 100)")}
+        ${tile("GC · N", `${fmt(s.gc, 1)}%`, "", `${fmt(s.n, 2)}% N bases`)}
+      </div>
+      <p class="summary">A Phred score Q means a 1 in 10<sup>Q/10</sup> chance that the base is wrong.
+        Green is good (Q28 and up), amber is acceptable, red is poor (below Q20). Illumina reads usually lose quality toward their 3′ end.${r.bin_size > 1 ? ` Positions are grouped in bins of ${fmt(r.bin_size)} bases.` : ""}</p>
+      ${qualityPlot(r.positions, s.max_length)}
+      ${histogram(bars, { label: "Reads by mean quality", xLabel: "Mean Phred score of the read" })}
+      <h3 class="section-title">Quality trimming</h3>
+      <p class="summary">Each read is cut at the first ${t.window}-base window whose mean quality falls below Q${t.threshold}, like Trimmomatic's SLIDINGWINDOW. Reads shorter than ${fmt(t.min_length)} bp after trimming are dropped. Change the settings above.</p>
+      <div class="tiles">
+        ${tile("Reads kept", fmt(a.reads), "", `${fmt(s.reads ? 100 * a.reads / s.reads : 0, 1)}% of ${fmt(s.reads)}`)}
+        ${tile("Bases kept", fmt(pctKept, 1), "%", `${fmt(a.bases)} of ${fmt(s.bases)}`)}
+        ${tile("Mean length", fmt(a.mean_length, 1), "bp", "after trimming")}
+        ${tile("≥ Q30 after", fmt(a.q30, 1), "%", `was ${fmt(s.q30, 1)}%`)}
+        ${tile("Mean quality after", `Q${fmt(a.mean_quality, 1)}`, "", `was Q${fmt(s.mean_quality, 1)}`)}
+      </div>
+      <div class="actions trim-actions">${trimmed}</div>
+      <p class="note">Each read is also loaded as a sequence on the left, so the other tabs work on single reads. The whole set is included in <strong>All sequences</strong>.</p>`;
+  },
+
   report(r) {
     const csv = downloadButton("CSV", () => ["bioseq_report.csv", toCsv([
       ["id", "length_bp", "gc_percent", "A", "C", "G", "T", "orfs", "longest_orf_start", "longest_orf_end", "longest_orf_strand", "longest_orf_aa"],
@@ -671,7 +799,7 @@ function bindEvents() {
     const b = e.target.closest("button[data-id]");
     if (!b) return;
     state.selected = b.dataset.id;
-    if (state.tab === "report") state.tab = "overview";
+    if (DATASET_TABS.includes(state.tab)) state.tab = "overview";
     renderRecords();
     renderTool();
   });
@@ -703,6 +831,9 @@ function bindEvents() {
   bindNumber("#window-input", "window");
   bindNumber("#na-input", "na");
   bindNumber("#oligo-input", "oligo");
+  bindNumber("#trim-q-input", "trimQ");
+  bindNumber("#trim-window-input", "trimWindow");
+  bindNumber("#min-length-input", "minLength");
 
   $("#motif-form").addEventListener("submit", e => {
     e.preventDefault();
@@ -735,7 +866,7 @@ function bindEvents() {
 
   let lastWidth = window.innerWidth;
   window.addEventListener("resize", debounce(() => {
-    if (window.innerWidth !== lastWidth && ["orfs", "motif", "composition"].includes(state.tab)) renderTool();
+    if (window.innerWidth !== lastWidth && ["orfs", "motif", "composition", "quality"].includes(state.tab)) renderTool();
     lastWidth = window.innerWidth;
   }, 200));
 }
