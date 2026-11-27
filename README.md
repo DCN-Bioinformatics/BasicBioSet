@@ -6,6 +6,7 @@ It reads DNA sequences from a FASTA file and reports basic statistics.
 ## Features
 
 - FASTA file parsing (DNA or RNA: U is read as T)
+- FASTQ reads: quality summary (mean quality, % of bases ≥ Q20/Q30), per-position quality plot, sliding-window quality trimming and export of the trimmed reads
 - Nucleotide counts and GC content
 - Reverse complement
 - Transcription (DNA → mRNA) and translation (DNA → protein, standard genetic code)
@@ -30,6 +31,7 @@ Python 3.10+
 ```bash
 python3 main.py                          # interactive main menu
 python3 main.py my_sequences.fasta       # full report of your own file (no menu)
+python3 main.py my_reads.fastq           # read-quality summary of a FASTQ file
 python3 main.py --min-orf 60             # full report, only ORFs >= 60 nt
 python3 main.py my.fasta --menu          # open the menu with your own file loaded
 ```
@@ -72,7 +74,7 @@ python3 -m unittest discover tests
 
 ```
 bioseq/
-  fasta.py       FASTA reader
+  fasta.py       FASTA and FASTQ readers, read quality and trimming
   sequence.py    sequence operations (GC, reverse complement, translation, ORFs, codon usage)
   motifs.py      motif search, restriction enzymes and k-mer counting
   properties.py  melting temperature and molecular weight

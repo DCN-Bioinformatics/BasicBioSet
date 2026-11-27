@@ -27,6 +27,7 @@ class TestLoadText(unittest.TestCase):
         result = call("load_text", "  1 atgcatgcat gcatg\n 16 caTGC  ")
         self.assertTrue(result["ok"])
         self.assertEqual(result["records"], [{"id": "sequence", "length": 20, "gc": 50.0, "rna": False}])
+        self.assertEqual(result["format"], "fasta")
 
     def test_errors(self):
         self.assertFalse(call("load_text", "   ")["ok"])
@@ -46,6 +47,54 @@ class TestLoadText(unittest.TestCase):
         call("load_text", ">keep\nACGT")
         call("load_text", ">bad\nACGZ")
         self.assertTrue(call("run", "basics", "keep")["ok"])
+
+
+class TestFastq(unittest.TestCase):
+    READS = "@a x\nACGTACGTAC\n+\nIIIIII####\n@a\nGGGGCCCC\n+\nIIIIIIII\n"
+
+    def test_load_fastq(self):
+        r = call("load_text", self.READS)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["format"], "fastq")
+        self.assertFalse(r["truncated"])
+        self.assertEqual([x["id"] for x in r["records"]], ["a", "a_2"])  # duplicate id kept
+        self.assertTrue(call("run", "basics", "a")["ok"])  # reads work in the other tools
+
+    def test_fasta_resets_qualities(self):
+        call("load_text", self.READS)
+        call("load_text", ">s\nACGT")
+        self.assertEqual(call("run", "quality", "s"), {"ok": True, "fastq": False})
+
+    def test_quality_and_trimming(self):
+        call("load_text", self.READS)
+        r = call("run", "quality", "", json.dumps({"trim_q": "20", "trim_window": "2", "min_length": "5"}))
+        self.assertEqual((r["summary"]["reads"], r["summary"]["bases"]), (2, 18))
+        self.assertEqual(len(r["positions"]), 10)
+        self.assertEqual(r["trim"]["min_length"], 5)
+        self.assertEqual((r["trim"]["after"]["reads"], r["trim"]["after"]["bases"]), (2, 14))
+        out = call("trimmed_fastq", json.dumps({"trim_q": "20", "trim_window": "2", "min_length": "7"}))
+        self.assertEqual(out["reads"], 1)
+        self.assertEqual(out["text"], "@a_2\nGGGGCCCC\n+\nIIIIIIII\n")
+        self.assertFalse(call("run", "quality", "", json.dumps({"trim_q": "0"}))["ok"])
+
+    def test_bad_fastq(self):
+        r = call("load_text", "@a\nACGT\n+\nII")
+        self.assertFalse(r["ok"])
+        self.assertIn("looks like FASTQ", r["error"])
+
+    def test_read_cap(self):
+        many = "".join(f"@r{i}\nACGT\n+\nIIII\n" for i in range(bridge.MAX_READS + 5))
+        r = call("load_text", many)
+        self.assertTrue(r["truncated"])
+        self.assertEqual(len(r["records"]), bridge.MAX_READS)
+
+    def test_sample_file(self):
+        text = (Path(__file__).resolve().parent.parent / "data" / "samples" / "lambda_reads.fastq").read_text()
+        r = call("load_text", text)
+        self.assertEqual(len(r["records"]), 300)
+        q = call("run", "quality", "", "{}")
+        self.assertEqual(q["summary"]["max_length"], 150)
+        self.assertLess(q["positions"][-1]["mean"], q["positions"][0]["mean"])  # 3' quality drop
 
 
 class TestRun(unittest.TestCase):

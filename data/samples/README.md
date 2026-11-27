@@ -61,6 +61,20 @@ Nearest-neighbor values use the defaults of 50 mM Na⁺ and 250 nM primer, and m
 the duplex. The basic formulas ignore salt, which is why they come out lower.
 Bonus: `short_12mer` ends in a HindIII site, which you can find with Motif search.
 
+### `lambda_reads.fastq`: sequencing reads with quality scores
+
+300 simulated Illumina-style reads (150 bp) taken from random places on both strands of the
+λ genome. They were generated with bioseq, so they are not real instrument data. Quality starts
+around Q37 and falls toward the 3′ end, as on real Illumina runs, and about 1 read in 7 has a
+very poor tail. Sequencing errors and N bases were added where the quality is low.
+
+- It opens on the **Read quality** tab: 300 reads, mean Q32.8, 82.1 % of bases ≥ Q30.
+- The box plot shows the 3′ drop: the boxes slide down after base 110, and the whiskers reach into red.
+- **Trimming** with the defaults (Q20, 4-base window, keep ≥ 36 bp) keeps all 300 reads and 95.6 %
+  of the bases. Bases ≥ Q30 rise from 82.1 % to 85.9 %. Try Q30 and a minimum of 100 bp: 265 reads remain.
+- Every read is also a normal sequence, so the other tabs work on one read at a time.
+- In the terminal: `python3 main.py data/samples/lambda_reads.fastq`, or menu option 13.
+
 ### `genbank_style_paste.txt`: pasting a GenBank listing
 
 Open the file, copy everything, paste it into the box and press **Analyze**. The position numbers

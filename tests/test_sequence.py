@@ -10,25 +10,34 @@ from bioseq import (
     cpg_obs_exp,
     cut_position,
     dna_molecular_weight,
+    fastq_summary,
     find_cpg_islands,
     find_enzyme,
     find_motif,
     find_orfs,
+    format_fastq,
     gc_content,
     gc_skew,
+    is_fastq,
     is_rna,
     kmer_counts,
     melting_temperature,
     melting_temperature_nn,
     overhang,
+    parse_fastq,
+    phred_scores,
+    phred_string,
     protein_molecular_weight,
+    quality_by_position,
     read_fasta,
+    read_fastq,
     reverse_complement,
     shannon_entropy,
     six_frame_translation,
     sliding_window,
     transcribe,
     translate,
+    trim_read,
 )
 
 
@@ -229,6 +238,87 @@ class TestFasta(unittest.TestCase):
             path = Path(tmp) / "test.fasta"
             path.write_text(">a first record\nACGT\nacgt\n\n>b\nTTTT\n")
             self.assertEqual(read_fasta(path), {"a": "ACGTACGT", "b": "TTTT"})
+
+
+FASTQ = """@r1 first read
+ACGTAC
++
+IIIII#
+@r2
+GGNN
++r2
+II!!
+"""
+
+
+class TestFastq(unittest.TestCase):
+    def test_is_fastq(self):
+        self.assertTrue(is_fastq("\n  @r1\nACGT\n+\nIIII"))
+        self.assertFalse(is_fastq(">a\nACGT"))
+        self.assertFalse(is_fastq(""))
+
+    def test_phred_round_trip(self):
+        self.assertEqual(phred_scores("!+5?I"), [0, 10, 20, 30, 40])
+        self.assertEqual(phred_string([0, 10, 20, 30, 40]), "!+5?I")
+        with self.assertRaises(ValueError):
+            phred_scores(" ")  # below '!'
+
+    def test_parse_fastq(self):
+        reads = parse_fastq(FASTQ.splitlines())
+        self.assertEqual(reads, [("r1", "ACGTAC", [40] * 5 + [2]), ("r2", "GGNN", [40, 40, 0, 0])])
+        self.assertEqual(len(parse_fastq(FASTQ.splitlines(), max_reads=1)), 1)
+        self.assertEqual(parse_fastq(format_fastq(reads).splitlines()), reads)
+
+    def test_quality_line_starting_with_at_or_gt(self):
+        # '@' (Q31) and '>' (Q29) are valid quality characters, even first on the line.
+        reads = parse_fastq(["@r", "ACG", "+", "@>I"])
+        self.assertEqual(reads[0][2], [31, 29, 40])
+
+    def test_malformed_fastq(self):
+        for text, message in [
+            ("@r\nACGT\n+\nIII", "quality has 3 characters"),
+            ("@r\nACGT\nIIII\nIIII", "separator line"),
+            ("@r\nACGT\n+", "incomplete record"),
+            ("r\nACGT\n+\nIIII", "'@read_id' header"),
+        ]:
+            with self.assertRaisesRegex(ValueError, message):
+                parse_fastq(text.splitlines())
+
+    def test_read_fastq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reads.fastq"
+            path.write_text(FASTQ)
+            self.assertEqual([r[0] for r in read_fastq(path)], ["r1", "r2"])
+
+    def test_trim_read(self):
+        seq = "ACGTACGTAC"
+        good, bad = [35] * 6, [5] * 4
+        self.assertEqual(trim_read(seq, good + bad, threshold=20, window=4), ("ACGTAC", good))
+        self.assertEqual(trim_read(seq, [35] * 10), (seq, [35] * 10))  # nothing to trim
+        self.assertEqual(trim_read("ACGT", [2, 2, 40, 40], window=2), ("", []))  # bad start
+        # Window mean 18.75 < 20 starts at base 3; its leading Q30 base is kept.
+        self.assertEqual(trim_read("ACGTAC", [30, 30, 30, 30, 10, 5], window=4)[0], "ACGT")
+        self.assertEqual(trim_read("AC", [30, 30], window=10)[0], "AC")  # window > read
+        with self.assertRaises(ValueError):
+            trim_read("ACGT", [30] * 4, window=0)
+
+    def test_quality_by_position(self):
+        rows = quality_by_position([[10, 20, 30], [30, 40]])
+        self.assertEqual([(r["start"], r["end"], r["reads"]) for r in rows], [(1, 1, 2), (2, 2, 2), (3, 3, 1)])
+        self.assertEqual([r["mean"] for r in rows], [20.0, 30.0, 30.0])
+        q = quality_by_position([[v] for v in range(1, 11)])[0]  # values 1..10 at one position
+        self.assertEqual((q["p10"], q["q1"], q["median"], q["q3"], q["p90"]), (1, 3, 5, 7, 9))
+        binned = quality_by_position([[10, 20, 30, 40, 50]], bin_size=2)
+        self.assertEqual([(r["start"], r["end"], r["mean"]) for r in binned],
+                         [(1, 2, 15.0), (3, 4, 35.0), (5, 5, 50.0)])
+
+    def test_fastq_summary(self):
+        s = fastq_summary(parse_fastq(FASTQ.splitlines()))
+        self.assertEqual((s["reads"], s["bases"], s["min_length"], s["max_length"]), (2, 10, 4, 6))
+        self.assertAlmostEqual(s["mean_quality"], (40 * 7 + 2) / 10)
+        self.assertEqual((s["q20"], s["q30"]), (70.0, 70.0))
+        self.assertEqual(s["n"], 20.0)
+        self.assertEqual(fastq_summary([])["reads"], 0)
 
 
 if __name__ == "__main__":

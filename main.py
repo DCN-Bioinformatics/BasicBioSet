@@ -23,12 +23,15 @@ from bioseq import (
     cpg_obs_exp,
     cut_position,
     dna_molecular_weight,
+    fastq_summary,
     find_cpg_islands,
     find_enzyme,
     find_motif,
     find_orfs,
+    format_fastq,
     gc_content,
     gc_skew,
+    is_fastq,
     is_rna,
     kmer_counts,
     melting_temperature,
@@ -36,7 +39,9 @@ from bioseq import (
     orf_codon_usage,
     overhang,
     protein_molecular_weight,
+    quality_by_position,
     read_fasta,
+    read_fastq,
     resolve_motif,
     reverse_complement,
     shannon_entropy,
@@ -44,6 +49,7 @@ from bioseq import (
     sliding_window,
     transcribe,
     translate,
+    trim_read,
     validate,
 )
 
@@ -106,25 +112,49 @@ def ask_int(prompt: str, default: int) -> int:
     return default
 
 
-def load(path: str) -> dict[str, str] | None:
+def read_sequences(path: str) -> tuple[dict[str, str], dict[str, list[int]]]:
+    """Read a FASTA or FASTQ file (detected from its content).
+
+    Returns ({id: sequence}, {id: phred scores}); the second dict is empty for
+    FASTA. Reads that share an id get a _2, _3, ... suffix.
+    """
+    with open(path) as handle:
+        fastq = is_fastq(handle.read(10_000))
+    if not fastq:
+        return read_fasta(path), {}
+    records, qualities = {}, {}
+    for read_id, seq, scores in read_fastq(path):
+        unique, n = read_id, 1
+        while unique in records:
+            n += 1
+            unique = f"{read_id}_{n}"
+        records[unique], qualities[unique] = seq, scores
+    return records, qualities
+
+
+def load(path: str) -> tuple[dict[str, str], dict[str, list[int]]] | None:
     try:
-        records = read_fasta(path)
-    except (OSError, ValueError) as e:
+        records, qualities = read_sequences(path)
+    except (OSError, ValueError, UnicodeDecodeError) as e:
         print(f"Could not read {path}: {e}")
         return None
-    print(f"Loaded {len(records)} sequence(s) from {path}")
+    kind = "read(s) from FASTQ file" if qualities else "sequence(s) from"
+    print(f"Loaded {len(records)} {kind} {path}")
     rna = [seq_id for seq_id, seq in records.items() if is_rna(seq)]
     if rna:
-        print(f"RNA read as DNA (U -> T): {', '.join(rna)}")
-    return records
+        shown = ", ".join(rna[:5]) + (f" and {len(rna) - 5} more" if len(rna) > 5 else "")
+        print(f"RNA read as DNA (U -> T): {shown}")
+    return records, qualities
 
 
 def choose_sequence(records: dict[str, str]) -> tuple[str, str] | None:
     """Let the user pick a loaded record or type a sequence. Returns (id, seq)."""
     ids = list(records)
     print("\nWhich sequence?")
-    for n, seq_id in enumerate(ids, 1):
+    for n, seq_id in enumerate(ids[:MAX_LISTED], 1):
         print(f"  {n}) {seq_id} ({len(records[seq_id])} bp)")
+    if len(ids) > MAX_LISTED:
+        print(f"  ... {len(ids) - MAX_LISTED} more: type a number up to {len(ids)}")
     print("  t) Type / paste a sequence")
     choice = ask("> ").lower()
     if choice == "t":
@@ -324,6 +354,60 @@ SECTIONS = [
 MODES = {key: func for _, items in SECTIONS for key, _, func in items}
 
 
+# ------------------------------------------------------------ FASTQ quality
+
+def print_quality(records: dict[str, str], qualities: dict[str, list[int]]) -> None:
+    reads = [(read_id, records[read_id], qualities[read_id]) for read_id in records]
+    s = fastq_summary(reads)
+    lengths = (f"{s['max_length']}" if s["min_length"] == s["max_length"]
+               else f"{s['min_length']}-{s['max_length']} (mean {s['mean_length']:.1f})")
+    print(f"  Reads:          {s['reads']:,}  ({s['bases']:,} bases)")
+    print(f"  Read length:    {lengths} bp")
+    print(f"  Mean quality:   Q{s['mean_quality']:.1f}")
+    print(f"  Bases >= Q30:   {s['q30']:.1f}%   (>= Q20: {s['q20']:.1f}%)")
+    print(f"  GC / N:         {s['gc']:.1f}% / {s['n']:.2f}%")
+    bin_size = -(-s["max_length"] // 60)  # ceiling division: at most 60 columns
+    rows = quality_by_position([q for _, _, q in reads], bin_size)
+    line = "".join(SPARK[min(7, max(0, (r["median"] - 2) * 8 // 40))] for r in rows)
+    print(f"  Median quality along the reads (Q2 to Q41, {bin_size} base(s) per column):")
+    print(f"    {line}")
+    worst = min(rows, key=lambda r: r["median"])
+    print(f"    lowest median Q{worst['median']} at bases {worst['start']}-{worst['end']}")
+
+
+def mode_quality(records: dict[str, str], qualities: dict[str, list[int]], path: str) -> None:
+    if not qualities:
+        print("Read quality needs a FASTQ file. Load one with L (try data/samples/lambda_reads.fastq).")
+        return
+    print_quality(records, qualities)
+    if ask("\nTrim low-quality ends? (y/N): ").lower() != "y":
+        return
+    threshold = ask_int("Cut where a window's mean quality drops below Q", 20)
+    window = ask_int("Window size in bases", 4)
+    min_length = ask_int("Drop reads shorter than (bp)", 36)
+    kept = []
+    for read_id, seq in records.items():
+        trimmed, scores = trim_read(seq, qualities[read_id], threshold, window)
+        if len(trimmed) >= min_length:
+            kept.append((read_id, trimmed, scores))
+    before, after = sum(map(len, records.values())), sum(len(seq) for _, seq, _ in kept)
+    print(f"Kept {len(kept):,} of {len(records):,} reads and "
+          f"{100 * after / before if before else 0:.1f}% of bases.")
+    if kept:
+        summary = fastq_summary(kept)
+        print(f"Quality after trimming: Q{summary['mean_quality']:.1f} mean, "
+              f"{summary['q30']:.1f}% of bases >= Q30")
+    stem = Path(path).name.rsplit(".", 1)[0]
+    out = ask(f"Save trimmed reads to [{stem}.trimmed.fastq] (n to skip): ") or f"{stem}.trimmed.fastq"
+    if out.lower() == "n":
+        return
+    try:
+        Path(out).write_text(format_fastq(kept))
+        print(f"Saved {len(kept):,} reads to {out}")
+    except OSError as e:
+        print(f"Could not save {out}: {e}")
+
+
 def print_menu(path: str, min_orf: int) -> None:
     print(f"\n===== bioseq main menu =====   file: {path}  |  min ORF: {min_orf} nt")
     print("   1) Full report of all sequences")
@@ -331,12 +415,14 @@ def print_menu(path: str, min_orf: int) -> None:
         print(f"  {title}")
         for key, label, _ in items:
             print(f"  {key:>2}) {label}")
-    print("   L) Load a different FASTA file")
+    print("  Reads")
+    print("  13) Read quality & trimming (FASTQ files)")
+    print("   L) Load a different FASTA or FASTQ file")
     print("   0) Exit")
 
 
 def menu(path: str, min_orf: int) -> None:
-    records = load(path) or {}
+    records, qualities = load(path) or ({}, {})
     settings = {"min_orf": min_orf}
     while True:
         print_menu(path, settings["min_orf"])
@@ -351,16 +437,19 @@ def menu(path: str, min_orf: int) -> None:
                     report(records, settings["min_orf"])
                 else:
                     print("No sequences loaded.")
+            elif choice == "13":
+                print()
+                mode_quality(records, qualities, path)
             elif choice in MODES:
                 picked = choose_sequence(records)
                 if picked is not None:
                     print()
                     MODES[choice](*picked, settings)
             elif choice == "l":
-                new_path = ask("Path to FASTA file: ")
-                new_records = load(new_path) if new_path else None
-                if new_records is not None:
-                    path, records = new_path, new_records
+                new_path = ask("Path to FASTA or FASTQ file: ")
+                loaded = load(new_path) if new_path else None
+                if loaded is not None:
+                    path, (records, qualities) = new_path, loaded
             else:
                 print("Invalid choice, pick an option from the menu.")
         except ValueError as e:  # e.g. an invalid motif or an empty sequence
@@ -398,7 +487,7 @@ def serve_web(port: int) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Basic DNA sequence analysis")
     parser.add_argument("fasta", nargs="?",
-                        help=f"FASTA file to analyze (default: {DEFAULT_FASTA}); "
+                        help=f"FASTA or FASTQ file to analyze (default: {DEFAULT_FASTA}); "
                              "giving a file skips the menu and prints a full report")
     parser.add_argument("--min-orf", type=int,
                         help=f"minimum ORF length in nucleotides (default: {DEFAULT_MIN_ORF})")
@@ -425,7 +514,11 @@ def main():
         print("Bye!")
         return
 
-    records = read_fasta(path)
+    records, qualities = read_sequences(path)
+    if qualities:
+        print(f"Read {len(records):,} reads from FASTQ file {path}\n")
+        print_quality(records, qualities)
+        return
     print(f"Read {len(records)} sequence(s) from {path}\n")
     report(records, min_orf)
 

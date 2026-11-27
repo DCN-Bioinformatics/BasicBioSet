@@ -8,7 +8,18 @@ from .composition import (
     shannon_entropy,
     sliding_window,
 )
-from .fasta import read_fasta
+from .fasta import (
+    fastq_summary,
+    format_fastq,
+    is_fastq,
+    parse_fastq,
+    phred_scores,
+    phred_string,
+    quality_by_position,
+    read_fasta,
+    read_fastq,
+    trim_read,
+)
 from .motifs import (
     COMMON_MOTIFS,
     RESTRICTION_ENZYMES,
@@ -48,7 +59,16 @@ __all__ = [
     "gc_skew",
     "shannon_entropy",
     "sliding_window",
+    "fastq_summary",
+    "format_fastq",
+    "is_fastq",
+    "parse_fastq",
+    "phred_scores",
+    "phred_string",
+    "quality_by_position",
     "read_fasta",
+    "read_fastq",
+    "trim_read",
     "COMMON_MOTIFS",
     "RESTRICTION_ENZYMES",
     "cut_position",
