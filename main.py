@@ -5,11 +5,14 @@ Usage:
     python3 main.py path/to/file.fasta       # full report, no menu
     python3 main.py --min-orf 60             # full report of the default file
     python3 main.py --web                    # open the website version locally
+    python3 main.py --web --host 0.0.0.0     # let other computers reach it
 """
 
 import argparse
+import errno
 import functools
 import http.server
+import socket
 import sys
 import webbrowser
 from pathlib import Path
@@ -57,6 +60,8 @@ DEFAULT_FASTA = "data/example.fasta"
 DEFAULT_MIN_ORF = 30
 MAX_LISTED = 50  # cap on how many motif hits get printed
 DEFAULT_PORT = 8000
+DEFAULT_HOST = "127.0.0.1"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SPARK = "▁▂▃▄▅▆▇█"
 
 
@@ -463,19 +468,49 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def serve_web(port: int) -> None:
-    """Serve the project folder locally and open the web app in a browser."""
+def web_url(host: str, port: int) -> str:
+    """URL to show for the web app. A wildcard address can't be opened in a
+    browser, so it is shown as localhost (other computers use this machine's IP)."""
+    if host in ("0.0.0.0", ""):
+        host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    if ":" in host:  # IPv6 literals need brackets in URLs
+        host = f"[{host}]"
+    return f"http://{host}:{port}/web/"
+
+
+def serve_web(port: int, host: str = DEFAULT_HOST) -> None:
+    """Serve the project folder and open the web app in a browser.
+
+    By default it only listens on this computer. Pass another host (e.g.
+    0.0.0.0) to let other computers on the network reach it; the browser is
+    then not opened, since that is usually a server with no screen.
+    """
     root = Path(__file__).resolve().parent
     handler = functools.partial(QuietHandler, directory=str(root))
+    server_class = http.server.ThreadingHTTPServer
+    if ":" in host:
+        server_class = type("ThreadingHTTPServerV6", (server_class,),
+                            {"address_family": socket.AF_INET6})
     try:
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+        server = server_class((host, port), handler)
     except OSError as e:
-        sys.exit(f"Could not start the web server on port {port}: {e}\n"
-                 f"Try another port, e.g. python3 main.py --web --port {port + 1}")
-    url = f"http://127.0.0.1:{port}/web/"
+        hint = (f"Check the address given to --host ({host})."
+                if isinstance(e, socket.gaierror) or e.errno == errno.EADDRNOTAVAIL
+                else f"Try another port, e.g. python3 main.py --web --port {port + 1}")
+        sys.exit(f"Could not start the web server on {host}:{port}: {e}\n{hint}")
+    url = web_url(host, port)
+    local = host in LOCAL_HOSTS
     print(f"bioseq web app running at {url}", flush=True)
+    if not local:
+        print(f"Listening on {host}:{port}: other computers can open "
+              f"http://<this-machine's-address>:{port}/web/", flush=True)
+        print("This simple server is meant for testing and local networks; "
+              "for a public site see docs/SELF_HOSTING.md.", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
-    webbrowser.open(url)
+    if local:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -497,10 +532,13 @@ def main():
                         help="open the website version in your browser")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"port for --web (default: {DEFAULT_PORT})")
+    parser.add_argument("--host", default=DEFAULT_HOST,
+                        help=f"address for --web to listen on (default: {DEFAULT_HOST}, "
+                             "this computer only; use 0.0.0.0 to allow other computers)")
     args = parser.parse_args()
 
     if args.web:
-        serve_web(args.port)
+        serve_web(args.port, args.host)
         return
 
     path = args.fasta or DEFAULT_FASTA
