@@ -3,10 +3,10 @@
 ## Start here · Empieza aquí
 
 1. **Open the website · Abre la web:** **[▶ dcn-bioinformatics.github.io/BasicBioSet/web](https://dcn-bioinformatics.github.io/BasicBioSet/web/)**
-2. **Read the guide · Lee la guía:** [📘 English guide](guias/Bioseq_web_guide.docx) · [📗 Guía en español](guias/Guia_web_bioseq.docx)
+2. **Read the guide · Lee la guía:** [📘 English guide](guias/Bioseq_web_guide.md) · [📗 Guía en español](guias/Guia_web_bioseq.md)
 
-- **English:** the website runs in your browser, with nothing to install, and your sequences never leave your computer. The step-by-step guide (a Word file in the [`guias/`](guias/) folder) explains every tab, what it is for, and the biology behind it. On GitHub, click the file, then **Download** (⬇) to open it in Word.
-- **Español:** la web funciona en tu navegador, sin instalar nada, y tus secuencias nunca salen de tu ordenador. La guía paso a paso (un archivo Word en la carpeta [`guias/`](guias/)) explica cada pestaña, para qué sirve y la biología que hay detrás. En GitHub, haz clic en el archivo y luego en **Download** (⬇) para abrirlo con Word.
+- **English:** the website runs in your browser, with nothing to install, and your sequences never leave your computer. The step-by-step guide explains every tab, what it is for, and the biology behind it. It opens right here on GitHub; a Word version is also in the [`guias/`](guias/) folder.
+- **Español:** la web funciona en tu navegador, sin instalar nada, y tus secuencias nunca salen de tu ordenador. La guía paso a paso explica cada pestaña, para qué sirve y la biología que hay detrás. Se lee directamente aquí en GitHub; en la carpeta [`guias/`](guias/) también hay una versión en Word.
 
 ---
 
