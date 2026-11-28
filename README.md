@@ -64,6 +64,9 @@ from loading the Python files. Use the command above.
 then share `https://<your-user>.github.io/<repo>/web/`. The empty `.nojekyll` file
 in the repository root is required. Without it, GitHub skips `bioseq/__init__.py`.
 
+**Host it on your own server:** see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)
+for nginx, Apache and quick-test setups, HTTPS, updates and troubleshooting.
+
 ## Tests
 
 ```bash
