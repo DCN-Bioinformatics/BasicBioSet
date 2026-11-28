@@ -1,5 +1,9 @@
 # bioseq
 
+**[▶ Open the website](https://dcn-bioinformatics.github.io/BasicBioSet/web/)**: analyze DNA, RNA and FASTQ reads in your browser, with nothing to install. Your sequences never leave your computer.
+
+Step-by-step guides to the website: [English](Bioseq_web_guide.docx) · [Español](Guia_web_bioseq.docx)
+
 A small, beginner-friendly bioinformatics project in pure Python (no external dependencies).
 It reads DNA sequences from a FASTA file and reports basic statistics.
 
