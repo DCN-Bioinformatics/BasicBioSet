@@ -58,7 +58,7 @@ python3 main.py data/example.fasta      # prints a full report in the terminal
 
 On a machine with a desktop, `python3 main.py --web` opens the website at `http://127.0.0.1:8000/web/`.
 
-This built-in server only listens on `127.0.0.1` (localhost), so **other computers can't reach it**, and it tries to open a browser on the server. Use it only to test on your own machine. Step 3 covers serving to other people.
+By default this server only listens on `127.0.0.1` (localhost), so **other computers can't reach it**. To open it to your network, add `--host 0.0.0.0` (see option A below). Step 3 covers serving to other people.
 
 ## Step 3: Serve it on your server
 
@@ -67,8 +67,11 @@ Use nginx (option B) for a permanent site. Option A is fine for a quick demo on 
 ### Option A: Python's built-in server (quick test)
 
 ```bash
-python3 -m http.server 8000 --bind 0.0.0.0 --directory /srv/bioseq
+cd /srv/bioseq
+python3 main.py --web --host 0.0.0.0 --port 8000
 ```
+
+With a non-local `--host` it doesn't try to open a browser on the server. Without the bioseq code you can get the same with `python3 -m http.server 8000 --bind 0.0.0.0 --directory /srv/bioseq`.
 
 Open `http://<server-ip>:8000/web/` from another computer. Press Ctrl+C to stop it. This server isn't hardened, so don't leave it exposed to the internet.
 
@@ -169,7 +172,7 @@ Most problems show up in the browser's developer console (F12 → Console and Ne
 | Engine never starts and the page opens as `file:///...` | The page was opened from disk | Serve it over HTTP (Step 3). |
 | 404 errors for `../bioseq/*.py` or `../data/example.fasta` | Only `web/` is being served | Point the server root at the whole repository folder. |
 | 403 Forbidden | The web server can't read `/srv/bioseq` | `sudo chmod -R o+rX /srv/bioseq` |
-| Can't connect from another computer | `main.py --web` only listens on localhost, or the firewall blocks the port | Use option A, B or C, and open the port. |
+| Can't connect from another computer | `main.py --web` was started without `--host 0.0.0.0`, or the firewall blocks the port | Add `--host 0.0.0.0` (or use option B or C) and open the port. |
 | Engine fails to load on a closed network | Visitors can't reach `cdn.jsdelivr.net` | Allow that domain. Fully offline hosting isn't supported out of the box. |
 | `ModuleNotFoundError` right after an update | The browser cached an old `app.js` | Hard-refresh (Ctrl+Shift+R) or add the no-cache rule above. |
 | First load is slow | About 10 MB engine download | Normal. Later visits use the browser cache. |

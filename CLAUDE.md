@@ -14,7 +14,7 @@ python3 -m unittest tests.test_web.TestLoadText.test_fasta           # one test
 python3 main.py                      # interactive menu on data/example.fasta
 python3 main.py file.fasta           # full report, no menu (--min-orf N to filter)
 python3 main.py file.fasta --menu    # menu with a custom file
-python3 main.py --web [--port 8080]  # serve the website at http://127.0.0.1:8000/web/
+python3 main.py --web [--port 8080] [--host 0.0.0.0]  # serve the website at http://127.0.0.1:8000/web/ (localhost-only unless --host)
 ```
 
 The website must be served over HTTP (via `--web` or GitHub Pages); opening `web/index.html` from disk fails because the browser blocks fetching the `.py` files.
@@ -30,7 +30,7 @@ One analysis library with two front ends that must give identical results:
   - Browsers cache `app.js` (10 min on GitHub Pages) but fetch the `.py` files with `cache: "no-cache"`, so right after a deploy a stale `BIOSEQ_FILES` can meet a new `__init__.py` that imports a module missing from the list, and the engine fails to start. Prefer extending existing modules over adding new ones.
   - `web/bridge.py` is the JSON boundary: every public function takes strings and returns a JSON string `{"ok": true, ...}` or `{"ok": false, "error": "..."}`, so JS never touches Python objects. `load_text()` parses input into module-level `_records`; `run(tool, seq_id, params_json)` dispatches through the `TOOLS` dict; `report` and `quality` are special-cased because they cover all loaded records (`DATASET_TABS` in `app.js`). FASTQ input keeps per-read Phred scores in `_qualities` alongside `_records`. A new web analysis = a `_tool(seq, params) -> dict` function registered in `TOOLS`, plus rendering code in `app.js`.
   - Positions: `bioseq.find_orfs` returns 0-based `start`; the bridge and terminal output convert to 1-based for display.
-- **`tests/`** — `test_sequence.py` covers the library; `test_web.py` imports `web/bridge.py` in regular CPython (it runs unchanged outside Pyodide) and asserts on the decoded JSON.
+- **`tests/`** — `test_sequence.py` covers the library; `test_main.py` covers the `--web`/`--host` helpers in `main.py`; `test_web.py` imports `web/bridge.py` in regular CPython (it runs unchanged outside Pyodide) and asserts on the decoded JSON.
 
 ## Constraints
 

@@ -54,6 +54,7 @@ downloads about 10 MB for the Python engine. Later visits are cached and faster.
 ```bash
 python3 main.py --web              # opens http://127.0.0.1:8000/web/
 python3 main.py --web --port 8080  # if port 8000 is busy
+python3 main.py --web --host 0.0.0.0  # let other computers on your network open it
 ```
 
 Opening `web/index.html` directly from disk won't work, because browsers block it
